@@ -1,6 +1,6 @@
 [package]
 name = "c0c"
 version = "0.1.0"
-edition = "2021"
+authors = ["Nick Maus <nmausv@gmail.com>"]
 
 [dependencies]
