@@ -22,6 +22,39 @@ pub enum RegExp {
     Star(Box<RegExp>),
 }
 
+impl RegExp {
+    /// Convenience function to create a regex matching a given word.
+    ///
+    /// Does not support ranges, or constructions, or star constructions.
+    ///
+    /// Essentially, given a word `w`, this will create a RegExp that matches
+    /// each character from `w` in order.
+    pub fn from_word(w: &str) -> RegExp {
+        // recursive:
+        //
+        // if word is empty, empty regex
+        //
+        // if word is not empty
+        // create regex from the rest of the word
+        // add first character
+        if w.len() == 0 {
+            RegExp::Empty
+        } else if w.len() == 1 {
+            // optimization, use single without empty
+            // if the word has only one character
+            // unwrap guaranteed success since len > 0
+            RegExp::Single(w.chars().next().unwrap())
+        } else {
+            // unwrap guaranteed success since len > 0
+            let first_char = w.chars().next().unwrap();
+            RegExp::Split(
+                Box::new(RegExp::Single(first_char)),
+                Box::new(RegExp::from_word(&w[1..])),
+            )
+        }
+    }
+}
+
 /// The DFA states are encoded as usizes for easy indexing into `Vec`
 type DFAState = usize;
 /// The Nondeterministic Finite Automaton type
