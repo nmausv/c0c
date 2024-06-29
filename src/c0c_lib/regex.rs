@@ -25,18 +25,11 @@ pub enum RegExp {
 impl RegExp {
     /// Convenience function to create a regex matching a given word.
     ///
-    /// Does not support ranges, or constructions, or star constructions.
+    /// Does not support `Range`, `Or`, or `Star` constructions.
     ///
-    /// Essentially, given a word `w`, this will create a RegExp that matches
+    /// Essentially, given a word `w`, this will create a `RegExp` that matches
     /// each character from `w` in order.
     pub fn from_word(w: &str) -> RegExp {
-        // recursive:
-        //
-        // if word is empty, empty regex
-        //
-        // if word is not empty
-        // create regex from the rest of the word
-        // add first character
         if w.len() == 0 {
             RegExp::Empty
         } else if w.len() == 1 {
@@ -50,6 +43,27 @@ impl RegExp {
             RegExp::Split(
                 Box::new(RegExp::Single(first_char)),
                 Box::new(RegExp::from_word(&w[1..])),
+            )
+        }
+    }
+
+    /// Convenience function to create a regex that matches any character
+    /// in a given word.
+    ///
+    /// Does not support `Range`, `Or`, or `Star` constructions.
+    ///
+    /// Essentially, given a string of characters, this will create a `RegExp`
+    /// each character from `w` in order.
+    pub fn from_charlist(w: &str) -> RegExp {
+        if w.len() == 0 {
+            RegExp::Empty
+        } else if w.len() == 1 {
+            RegExp::Single(w.chars().next().unwrap())
+        } else {
+            let first_char = w.chars().next().unwrap();
+            RegExp::Or(
+                Box::new(RegExp::Single(first_char)),
+                Box::new(RegExp::from_charlist(&w[1..])),
             )
         }
     }

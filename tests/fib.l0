@@ -1,7 +1,7 @@
 int fib(int n);
 
 int main() {
-  fib(100);
+  return fib(100);
 }
 
 int fib(int n) {

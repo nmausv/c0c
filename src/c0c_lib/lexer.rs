@@ -8,7 +8,7 @@ use crate::c0c_lib::regex;
 
 use super::regex::{RegExp, DFA};
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 /// Lexer Error Type
 pub struct LexerError {
     line: usize,
@@ -42,6 +42,9 @@ impl Error for LexerError {}
 /// This string is only guaranteed to match the supplied RegExp, further checks
 /// (such as bounds checks on integers) must be done downstream.
 pub enum Token {
+    // Whitespace
+    WHITESPACE,
+    NEWLINE,
     // Syntax
     COMMA,
     SEMICOLON,
@@ -96,6 +99,12 @@ pub enum Token {
 }
 
 /// Type for keeping location information inside a file alongside a token
+///
+/// NOTE: line numbers and column numbers are incorrect right now.
+/// The line numbers do not include any empty lines, and the column numbers
+/// do not include any amount of whitespace.
+///
+/// They are correct if you remove all whitespace from the file.
 #[derive(Debug, Clone)]
 pub struct MarkedToken {
     line: usize,
@@ -208,6 +217,17 @@ impl Lexer {
     pub fn new_c0c_lexer() -> Self {
         let default_priority: Priority = 0;
         let patterns: Vec<Lexeme> = vec![
+            // Whitespace
+            Lexeme::new(
+                RegExp::from_charlist(" \t\r"),
+                |_: &str| Token::WHITESPACE,
+                default_priority,
+            ),
+            Lexeme::new(
+                RegExp::from_word("\n"),
+                |_: &str| Token::NEWLINE,
+                default_priority,
+            ),
             // Syntax
             Lexeme::new(
                 RegExp::from_word(","),
@@ -557,41 +577,38 @@ impl Lexer {
         // stores stream of tokens lexed
         let mut tokens = Vec::new();
 
-        // store the current amount of characters consumed from the raw tokens
-        // declared outside to prevent repeated allocation/deallocation
-        let mut col_num: usize;
+        // one indexed because that's how (Neo)Vim counts columns/lines.
+        let mut col_num: usize = 1;
+        let mut line_num: usize = 1;
 
-        // store token index number
-        // declared outside to prevent repeated allocation/deallocation
-        let mut tok_ind: usize;
+        let total_len: usize = characters.len();
+        let mut consumed_len: usize = 0;
 
-        for (line_num, line) in characters.lines().enumerate() {
-            col_num = 0;
-            // read line by line for debug information
-            // split the file_string by whitespace
-            for raw_token in line.split_whitespace() {
-                tok_ind = 0;
-                while tok_ind < raw_token.len() {
-                    // match components of the raw token until done
-                    // for example, a raw token might be "x+1"
-                    // which we want to tokenize as [IDENT("x"), PLUS, DECNUM(1)]
-                    match self.match_raw(&raw_token[tok_ind..]) {
-                        None => {
-                            return Err(LexerError {
-                                line: line_num + 1,
-                                col: col_num + 1,
-                            })
-                        }
-                        Some((t, l)) => {
-                            tok_ind += l;
-                            col_num += l;
-                            tokens.push(MarkedToken {
-                                line: line_num + 1,
-                                column: col_num + 1,
-                                data: t,
-                            });
-                        }
-                    }
+        while consumed_len < total_len {
+            match self.match_raw(&characters[consumed_len..]) {
+                None => {
+                    return Err(LexerError {
+                        line: line_num,
+                        col: col_num,
+                    })
+                }
+                Some((Token::WHITESPACE, l)) => {
+                    col_num += l;
+                    consumed_len += l;
+                }
+                Some((Token::NEWLINE, l)) => {
+                    line_num += 1;
+                    col_num = 0;
+                    consumed_len += l;
+                }
+                Some((t, l)) => {
+                    col_num += l;
+                    tokens.push(MarkedToken {
+                        line: line_num + 1,
+                        column: col_num + 1,
+                        data: t,
+                    });
+                    consumed_len += l;
                 }
             }
         }
@@ -602,8 +619,6 @@ impl Lexer {
 
 #[cfg(test)]
 mod lexer_tests {
-    use crate::c0c_lib::regex::RegExp;
-
     use super::*;
 
     fn check_tokens(lexed: Vec<MarkedToken>, reference: Vec<Token>) -> bool {
@@ -703,5 +718,14 @@ mod lexer_tests {
                 Token::RBRACE,
             ]
         ));
+    }
+
+    #[test]
+    fn invalid_character() {
+        let lexer = Lexer::new_c0c_lexer();
+        assert_eq!(
+            lexer.tokenize("if if for & if for for").expect_err(""),
+            LexerError { col: 11, line: 1 }
+        );
     }
 }
