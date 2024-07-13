@@ -4,24 +4,45 @@ use std::{
     fmt::{self, Display},
 };
 
-use crate::c0c_lib::regex;
-
-use super::regex::{RegExp, DFA};
+use super::regex::*;
 
 #[derive(Debug, Eq, PartialEq)]
 /// Lexer Error Type
-pub struct LexerError {
-    line: usize,
-    col: usize,
+pub enum LexerError {
+    UnrecognizedCharacter { line: usize, col: usize },
+    UnopenedEndComment { line: usize, col: usize },
+    UnclosedStartComment { line: usize, col: usize },
+    InvalidInteger { line: usize, col: usize },
 }
 
 impl Display for LexerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Lexer error starting at line, col: ({}, {})",
-            self.line, self.col
-        )
+        match self {
+            Self::UnrecognizedCharacter { line, col } => {
+                write!(
+                    f,
+                    "Unrecognized character at line {}, col {}.",
+                    line, col
+                )
+            }
+            Self::UnopenedEndComment { line, col } => {
+                write!(
+                    f,
+                    "Unexpected comment end at line {}, col {}.",
+                    line, col
+                )
+            }
+            Self::UnclosedStartComment { line, col } => {
+                write!(
+                    f,
+                    "Unclosed comment started at line {}, col {}.",
+                    line, col
+                )
+            }
+            Self::InvalidInteger { line, col } => {
+                write!(f, "Invalid integer at line {}, col {}.", line, col)
+            }
+        }
     }
 }
 
@@ -38,6 +59,8 @@ impl Error for LexerError {}
 ///
 /// For numbers and identifiers, a string must be attached to distinguish between
 /// different numbers/identifiers.
+/// These strings will *not* be evaluated to make sure they fit within the integer
+/// size limits, and instead this check will be deferred.
 ///
 /// This string is only guaranteed to match the supplied RegExp, further checks
 /// (such as bounds checks on integers) must be done downstream.
@@ -45,6 +68,10 @@ pub enum Token {
     // Whitespace
     WHITESPACE,
     NEWLINE,
+    // Comments
+    LINECOMMENT,
+    MULTICOMMENTSTART,
+    MULTICOMMENTEND,
     // Syntax
     COMMA,
     SEMICOLON,
@@ -99,12 +126,6 @@ pub enum Token {
 }
 
 /// Type for keeping location information inside a file alongside a token
-///
-/// NOTE: line numbers and column numbers are incorrect right now.
-/// The line numbers do not include any empty lines, and the column numbers
-/// do not include any amount of whitespace.
-///
-/// They are correct if you remove all whitespace from the file.
 #[derive(Debug, Clone)]
 pub struct MarkedToken {
     line: usize,
@@ -125,15 +146,25 @@ impl MarkedToken {
 /// lower priority tokens.
 pub type Priority = i32;
 
+#[derive(Debug, Clone)]
 /// The unit for a rule of the lexer.
 ///
-/// - `pattern` is the regular expression that will match the token
+/// - `pattern` is the DFA that corresponds to the regular expression that will
+///    match the token
 /// - `token_builder` takes in a string that matches the regular expression
-/// and creates a token for it.
+///    and creates a token for it.
 /// - `priority` is the priority of the token compared to others.
-/// Higher priority means that this token will match instead of another.
+///    Higher priority means that this token will match instead of another.
+///
+/// Assume that any string passed to `token_builder` has already been
+/// checked for invalid sizes/formats.
+/// Most tokens won't need more checks than the regular expression, but
+/// some information that the regular expression cannot capture, such as
+/// integer size limits, needs to be checked externally.
+/// In those cases, the user **MUST** check any strings for these size limits
+/// before passing them to `token_builder`.
 pub struct Lexeme {
-    pattern: regex::RegExp,
+    engine: DFA,
     token_builder: fn(&str) -> Token,
     priority: Priority,
 }
@@ -141,12 +172,12 @@ pub struct Lexeme {
 impl Lexeme {
     /// Convenience function to create Lexemes inline
     fn new(
-        pattern: regex::RegExp,
+        pattern: RegExp,
         token_builder: fn(&str) -> Token,
         priority: Priority,
     ) -> Self {
         Lexeme {
-            pattern,
+            engine: DFA::from_regex(&pattern),
             token_builder,
             priority,
         }
@@ -178,7 +209,7 @@ pub struct Lexer {
     ///
     /// For tokens with data attached, the attached data will be disregarded in
     /// favor of the matched string.
-    lexemes: Vec<(regex::DFA<Option<char>>, fn(&str) -> Token, Priority)>,
+    lexemes: Vec<Lexeme>,
 }
 
 impl Lexer {
@@ -195,24 +226,13 @@ impl Lexer {
     /// [INT, IDENT("while"), NUM(0), SEMICOLON]
     /// so we need to prioritize keywords or deprioritize identifiers.
     pub fn new(patterns: Vec<Lexeme>) -> Self {
-        Lexer {
-            lexemes: patterns
-                .iter()
-                .map(|lexeme| {
-                    (
-                        DFA::from_regex(&lexeme.pattern),
-                        lexeme.token_builder,
-                        lexeme.priority,
-                    )
-                })
-                .collect(),
-        }
+        Lexer { lexemes: patterns }
     }
 
     /// Convenience function which adds all of the C0 lexical tokens
     /// to the Lexer.
     ///
-    /// For now, super grimy ugly don't look, future plans to create
+    /// For now, super grimy ugly, future plans to create
     /// a macro that makes this easier and less repetitive.
     pub fn new_c0c_lexer() -> Self {
         let default_priority: Priority = 0;
@@ -226,6 +246,22 @@ impl Lexer {
             Lexeme::new(
                 RegExp::from_word("\n"),
                 |_: &str| Token::NEWLINE,
+                default_priority,
+            ),
+            // Comments
+            Lexeme::new(
+                RegExp::from_word("//"),
+                |_: &str| Token::LINECOMMENT,
+                default_priority,
+            ),
+            Lexeme::new(
+                RegExp::from_word("/*"),
+                |_: &str| Token::MULTICOMMENTSTART,
+                default_priority,
+            ),
+            Lexeme::new(
+                RegExp::from_word("*/"),
+                |_: &str| Token::MULTICOMMENTEND,
                 default_priority,
             ),
             // Syntax
@@ -462,7 +498,7 @@ impl Lexer {
                     )))),
                 ),
                 |id: &str| Token::IDENT(String::from(id)),
-                // low priority to focus keywords
+                // low priority so keywords are matched first
                 -1,
             ),
             // Constants
@@ -506,7 +542,7 @@ impl Lexer {
         Self::new(patterns)
     }
 
-    /// Internal function to match a string without whitespace against the lexemes
+    /// Internal function to match a string against the lexemes
     ///
     /// Returns None if the raw token doesn't match any of the lexemes, or the
     /// token it matched along with the number of consumed characters if the raw
@@ -514,12 +550,19 @@ impl Lexer {
     ///
     /// Always chooses the longest matching prefix, and in cases of ambiguity
     /// chooses the token with the highest priority.
-    fn match_raw(&self, raw_token: &str) -> Option<(Token, usize)> {
+    fn match_all(&self, raw_token: &str) -> Option<(Token, usize)> {
+        // stores vector of (match length, token builder, priority)
         let match_iter: Vec<_> = self
             .lexemes
             .iter()
             // try matching every lexeme
-            .map(|(dfa, t, p)| (dfa.matches_against(raw_token), t, p))
+            .map(|lexeme| {
+                (
+                    lexeme.engine.matches_against(raw_token),
+                    lexeme.token_builder,
+                    lexeme.priority,
+                )
+            })
             // filter out any non matches
             .filter_map(|(match_len, t, p)| match_len.map(|l| (l, t, p)))
             .collect();
@@ -546,24 +589,61 @@ impl Lexer {
             None => {
                 panic!("expected longest match to have at least one priority")
             }
-            Some((_, _, &p)) => p,
+            Some((_, _, p)) => p,
         };
 
-        // get list of candidate lexemes
+        // get list of max length lexemes with max priority
         let candidates: Vec<_> = match_iter
             .iter()
-            .filter(|(l, _, &p)| (*l == max_len) && (p == max_pri))
+            .filter(|&(l, _, p)| (*l == max_len) && (p == max_pri))
             .collect();
 
         // if there are multiple options, error out instead of just returning None
         if candidates.len() > 1 {
-            todo!();
+            panic!("multiple lexemes with longest match and same priority");
         }
 
         // take the first (and only) candidate
-        let (tok_len, token_builder, _) = candidates[0];
+        let &(tok_len, token_builder, _) = candidates[0];
 
-        return Some((token_builder(&raw_token[..*tok_len]), *tok_len));
+        // return the lexeme
+        return Some((token_builder(&raw_token[..tok_len]), tok_len));
+    }
+
+    /// Internal function to consume characters from a string until a certain token is reached.
+    ///
+    /// **TOKENS WITH ATTACHED STRING DATA MUST HAVE THEIR DATA BE THE EMPTY STRING.**
+    /// **IF A TOKEN BUILDER PANICS ON EMPTY STRINGS, IT CANNOT BE USED AS A FILTER.**
+    ///
+    /// Returns `None` if the raw token doesn't match any of the lexemes, or `Some` of the
+    /// token it matched along with the number of consumed characters.
+    ///
+    /// Always chooses the longest matching prefix, and in cases of ambiguity
+    /// chooses the token with the highest priority.
+    fn skip_until(
+        &self,
+        raw_token: &str,
+        tokens: &[Token],
+    ) -> Option<(Token, usize)> {
+        let smaller_lexer = Lexer {
+            lexemes: self
+                .lexemes
+                .iter()
+                .filter(|&lexeme| tokens.contains(&(lexeme.token_builder)("")))
+                .cloned()
+                .collect(),
+        };
+
+        // skip characters until the first match
+        let mut consumed = 0;
+        let mut matched = smaller_lexer.match_all(&raw_token[consumed..]);
+        while matched.is_none() {
+            consumed += 1;
+            matched = smaller_lexer.match_all(&raw_token[consumed..]);
+        }
+
+        // return that match, and add in the consumed characters
+        matched.map(|(t, l)| (t, consumed + l))
     }
 
     /// Takes in a string of characters, and returns a string of tokens
@@ -584,21 +664,68 @@ impl Lexer {
         let total_len: usize = characters.len();
         let mut consumed_len: usize = 0;
 
+        // marks the current line as being commented
+        let mut line_comment: bool = false;
+
+        // stack of starting locations for multiline comments
+        // when a closing comment is found, pop the most recent
+        // start off the stack.
+        // while the stack is not empty, only search for comment start/ends,
+        // and newlines (to keep line counts accurate).
+        let mut multi_comment_starts: Vec<(usize, usize)> = Vec::new();
+
         while consumed_len < total_len {
-            match self.match_raw(&characters[consumed_len..]) {
+            let opt: Option<(Token, usize)>;
+            if line_comment {
+                opt = self
+                    .skip_until(&characters[consumed_len..], &[Token::NEWLINE])
+            } else if multi_comment_starts.len() > 0 {
+                opt = self.skip_until(
+                    &characters[consumed_len..],
+                    &[
+                        Token::NEWLINE,
+                        Token::MULTICOMMENTSTART,
+                        Token::MULTICOMMENTEND,
+                    ],
+                )
+            } else {
+                opt = self.match_all(&characters[consumed_len..]);
+            }
+            match opt {
                 None => {
-                    return Err(LexerError {
+                    return Err(LexerError::UnrecognizedCharacter {
                         line: line_num,
                         col: col_num,
-                    })
+                    });
                 }
                 Some((Token::WHITESPACE, l)) => {
                     col_num += l;
                     consumed_len += l;
                 }
                 Some((Token::NEWLINE, l)) => {
+                    line_comment = false;
                     line_num += 1;
-                    col_num = 0;
+                    col_num = 1;
+                    consumed_len += l;
+                }
+                Some((Token::LINECOMMENT, l)) => {
+                    line_comment = true;
+                    col_num += l;
+                    consumed_len += l;
+                }
+                Some((Token::MULTICOMMENTSTART, l)) => {
+                    multi_comment_starts.push((line_num, col_num));
+                    col_num += l;
+                    consumed_len += l;
+                }
+                Some((Token::MULTICOMMENTEND, l)) => {
+                    if let None = multi_comment_starts.pop() {
+                        return Err(LexerError::UnopenedEndComment {
+                            line: line_num,
+                            col: col_num,
+                        });
+                    }
+                    col_num += l;
                     consumed_len += l;
                 }
                 Some((t, l)) => {
@@ -613,6 +740,10 @@ impl Lexer {
             }
         }
 
+        if let Some((line, col)) = multi_comment_starts.pop() {
+            return Err(LexerError::UnclosedStartComment { line, col });
+        }
+
         Ok(tokens)
     }
 }
@@ -625,7 +756,8 @@ mod lexer_tests {
         reference
             == (lexed
                 .iter()
-                .map(|x| x.clone().unmark())
+                .cloned()
+                .map(|x| x.unmark())
                 .collect::<Vec<Token>>())
     }
 
@@ -725,7 +857,59 @@ mod lexer_tests {
         let lexer = Lexer::new_c0c_lexer();
         assert_eq!(
             lexer.tokenize("if if for & if for for").expect_err(""),
-            LexerError { col: 11, line: 1 }
+            LexerError::UnrecognizedCharacter { line: 1, col: 11 }
+        );
+    }
+
+    #[test]
+    fn mixed_single_line() {
+        let lexer = Lexer::new_c0c_lexer();
+        assert!(
+            check_tokens(
+                lexer.tokenize(
+                    "int main() {\n// what a cool comment *//*\n    return 0;\n}"
+                ).expect(""),
+                vec![
+                    Token::INT,
+                    Token::IDENT(String::from("main")),
+                    Token::LPAREN,
+                    Token::RPAREN,
+                    Token::LBRACE,
+                    Token::RETURN,
+                    Token::DECNUM(String::from("0")),
+                    Token::SEMICOLON,
+                    Token::RBRACE
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn nested_multi_line() {
+        let lexer = Lexer::new_c0c_lexer();
+        assert!(check_tokens(
+            lexer.tokenize("/* /* /* */ /* */ */ */").expect(""),
+            vec![]
+        ));
+    }
+
+    #[test]
+    fn incorrectly_nested_multiline() {
+        let lexer = Lexer::new_c0c_lexer();
+        assert_eq!(
+            lexer.tokenize("/* /* /* */ /* */ */").expect_err(""),
+            LexerError::UnclosedStartComment { line: 1, col: 1 }
+        );
+    }
+
+    #[test]
+    fn unopened_end_comment() {
+        let lexer = Lexer::new_c0c_lexer();
+        assert_eq!(
+            lexer.tokenize(
+                "int main() {\n/* what a cool comment */\n    return 0;\n}\n*/"
+            ).expect_err(""),
+            LexerError::UnopenedEndComment { line: 5, col: 1 }
         );
     }
 }

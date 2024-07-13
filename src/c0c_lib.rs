@@ -1,3 +1,2 @@
-// lexer libraries
-pub mod lexer;
-pub mod regex;
+// frontend
+pub mod frontend;

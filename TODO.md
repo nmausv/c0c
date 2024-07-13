@@ -2,6 +2,8 @@
 # Lexer
 
 ## Regex
+- [ ] Add better error handling for converting `DFA<RegExp>` to `DFA<Option<char>>`
+- [x] Privatize the generic, so that the type is only exposed as a DFA.
 
 ## Tokenizing
 

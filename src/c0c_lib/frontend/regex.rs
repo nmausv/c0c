@@ -78,8 +78,8 @@ type DFAState = usize;
 ///
 /// The type parameter `T` indicates the keys used for the transition functions.
 /// After the initial processing, `T` will always be `Option<char>`.
-#[derive(Debug)]
-pub struct DFA<T> {
+#[derive(Debug, Clone)]
+struct InvalidDFA<T> {
     /// Set of states = usizes
     ///
     /// List of states
@@ -100,7 +100,10 @@ pub struct DFA<T> {
     transitions: HashMap<(DFAState, T), HashSet<DFAState>>,
 }
 
-impl<'a> DFA<&'a RegExp> {
+#[derive(Debug, Clone)]
+pub struct DFA(InvalidDFA<Option<char>>);
+
+impl<'a> InvalidDFA<&'a RegExp> {
     fn insert_transition<'b: 'a>(
         &mut self,
         start: DFAState,
@@ -116,17 +119,17 @@ impl<'a> DFA<&'a RegExp> {
             .or_insert(HashSet::from([end]));
     }
 
-    /// Converts an `DFA<RegExp>` into an `DFA<Option<char>>`
+    /// Converts a `DFA<RegExp>` into an `DFA<Option<char>>`
     ///
     /// Require that every `RegExp` in the `DFA` is one of
     /// - `Empty`
     /// - `Single`
     /// - `Range`
-    fn remove_regex(mut self) -> DFA<Option<char>> {
+    fn remove_regex(mut self) -> DFA {
         // states stay the same, just iterate over every transition and switch
         // from RegExp to possibly many transitions from chars
 
-        let mut char_nfa: DFA<Option<char>> = DFA {
+        let mut char_nfa: InvalidDFA<Option<char>> = InvalidDFA {
             states: self.states,
             transitions: HashMap::new(),
         };
@@ -154,17 +157,17 @@ impl<'a> DFA<&'a RegExp> {
             }
         }
 
-        char_nfa
+        DFA(char_nfa)
     }
 }
 
-impl DFA<Option<char>> {
+impl DFA {
     /// Convert a regular expression into a DFA
     ///
     /// Procedure adapted from
     /// [https://www.cs.cmu.edu/~janh/courses/411/24/lectures/09-lex.pdf]
     pub fn from_regex(pat: &RegExp) -> Self {
-        let mut nfa: DFA<&RegExp> = DFA {
+        let mut nfa: InvalidDFA<&RegExp> = InvalidDFA {
             states: Vec::new(),
             transitions: HashMap::new(),
         };
@@ -249,6 +252,7 @@ impl DFA<Option<char>> {
         &self,
         pre_states: &mut HashSet<DFAState>,
     ) -> (HashSet<DFAState>, bool) {
+        let DFA(internal) = self;
         let mut post_states: HashSet<DFAState> = HashSet::new();
         // check if any pre states accept
         let mut accepting = false;
@@ -257,11 +261,11 @@ impl DFA<Option<char>> {
             // get a state
             let &state = pre_states.iter().next().unwrap();
             // if anything accepts, make accepting true, don't overwrite false
-            accepting |= self.states[state] == Some(true);
+            accepting |= internal.states[state] == Some(true);
             // remove the state from pre_states
             pre_states.remove(&state);
             // get empty transition end states
-            if let Some(end_states) = self.transitions.get(&(state, None)) {
+            if let Some(end_states) = internal.transitions.get(&(state, None)) {
                 for &end_state in end_states {
                     // add any new states to pre for further epsilon traversal
                     pre_states.insert(end_state);
@@ -270,7 +274,7 @@ impl DFA<Option<char>> {
 
                     // if post_state is accepting, mark accepting
                     // optimization: skip check if accepting already marked
-                    if !accepting && self.states[end_state] == Some(true) {
+                    if !accepting && internal.states[end_state] == Some(true) {
                         accepting = true;
                     }
                 }
@@ -285,6 +289,8 @@ impl DFA<Option<char>> {
     /// Returns the index (if any) of the longest match.
     /// Note that all matches must start at the beginning of the string.
     pub fn matches_against(&self, s: &str) -> Option<usize> {
+        let DFA(internal) = self;
+
         // before epsilon closure
         let mut pre_states: HashSet<DFAState> = HashSet::from([0 as DFAState]);
         // after epsilon closure
@@ -308,7 +314,7 @@ impl DFA<Option<char>> {
             for state in post_states.drain() {
                 // add new states to pre_states
                 if let Some(end_states) =
-                    self.transitions.get(&(state, Some(c)))
+                    internal.transitions.get(&(state, Some(c)))
                 {
                     pre_states =
                         pre_states.union(end_states).cloned().collect();
