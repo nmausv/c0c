@@ -1,0 +1,92 @@
+grammar;
+
+// Macros
+
+// Main
+use super::ast::*;
+
+pub Program: Program = {
+    "int" <i:Ident> "(" ")" <b:Block> => {
+      let Block::Body(stmts) = b;
+      Program {name: i, body:stmts}
+    }
+};
+
+Block: Block = {
+    "{" <Stmts> "}" => Block::Body(<>)
+};
+
+Stmts: Vec<Stmt> = {
+    <Stmt*> => <>,
+};
+
+Stmt: Stmt = {
+  <Block> => Stmt::Block(<>),
+  <Decl> ";" => <>,
+  <Simp> ";" => <>,
+  "return" <Exp> ";" => Stmt::Return(<>),
+}
+
+Decl: Stmt = {
+  "int" <Ident> => Stmt::Declare(<>, Type::Int),
+  "int" <i:Ident> <e:Exp> => Stmt::DeclareAssign(i, Type::Int, e),
+}
+
+Simp: Stmt = {
+  <v:lvalue> <op:AsnOp> <e:Exp> => Stmt::Assign(v, op, e),
+}
+
+lvalue: Ident = {
+  <Ident> => <>,
+  "(" <Ident> ")" => <>,
+}
+
+Exp: Exp = {
+#[precedence(level="0")]
+  "(" <Exp> ")" => <>,
+  <Num> => Exp::Num(<>),
+  <Ident> => Exp::Ident(<>),
+
+#[precedence(level="1")] #[assoc(side="right")]
+  "-" <Exp> => Exp::BinOp(Box::new(Exp::Num(0)), BinOp::Minus, Box::new(<>)),
+
+#[precedence(level="2")] #[assoc(side="left")]
+  <el:Exp> "*" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Times, Box::new(er)),
+  <el:Exp> "/" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Divide, Box::new(er)),
+  <el:Exp> "%" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Modulo, Box::new(er)),
+
+#[precedence(level="3")] #[assoc(side="left")]
+  <el:Exp> "+" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Plus, Box::new(er)),
+  <el:Exp> "-" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Minus, Box::new(er)),
+}
+
+AsnOp: AsnOp = {
+  "=" => AsnOp::Eq,
+  "+=" => AsnOp::PlusEq,
+  "-=" => AsnOp::MinusEq,
+  "*=" => AsnOp::TimesEq,
+  "/=" => AsnOp::DivEq,
+  "%=" => AsnOp::ModEq,
+}
+
+Num: i32 = {
+  <DecNum> => <>,
+  <HexNum> => <>,
+}
+
+// 0 | [1-9][0-9]*
+DecNum: i32 = {
+  <r"(0|[1-9][0-9]+)"> => {
+    i32::from_str_radix(<>, 10).expect("should be valid decimal number")
+  }
+};
+
+// 0[xX][0-9a-fA-F]+
+HexNum: i32 = {
+  <r"0[xX][0-9a-fA-F]+"> => {
+    i32::from_str_radix(&<>[2..], 16).expect("should be valid hexadecimal number")
+  }
+};
+
+// [A-Za-z_][A-Za-z0-9_]*
+Ident: String = <s:r"[A-Za-z_][A-Za-z0-9_]*"> => String::from(s);
