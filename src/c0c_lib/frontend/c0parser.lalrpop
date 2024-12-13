@@ -7,17 +7,13 @@ use super::ast::*;
 
 pub Program: Program = {
     "int" <i:Ident> "(" ")" <b:Block> => {
-      let Block::Body(stmts) = b;
+      let stmts = b;
       Program {name: i, body:stmts}
     }
 };
 
-Block: Block = {
-    "{" <Stmts> "}" => Block::Body(<>)
-};
-
-Stmts: Vec<Stmt> = {
-    <Stmt*> => <>,
+Block: Vec<Stmt> = {
+    "{" <Stmt*> "}" => <>
 };
 
 Stmt: Stmt = {

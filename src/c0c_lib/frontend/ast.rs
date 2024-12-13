@@ -7,16 +7,11 @@ pub struct Program {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Block {
-    Body(Vec<Stmt>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Declare(Ident, Type),
     DeclareAssign(Ident, Type, Exp),
     Assign(Ident, AsnOp, Exp),
-    Block(Block),
+    Block(Vec<Stmt>),
     Return(Exp),
 }
 
@@ -28,7 +23,7 @@ pub enum Exp {
 }
 
 // Operators
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BinOp {
     Plus,
     Minus,
@@ -37,7 +32,7 @@ pub enum BinOp {
     Modulo,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum CompareOp {
     Less,
     LessEq,
@@ -47,7 +42,7 @@ pub enum CompareOp {
     NotEq,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AsnOp {
     Eq,
     PlusEq,
@@ -58,7 +53,7 @@ pub enum AsnOp {
 }
 
 // Types
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
     Char,
