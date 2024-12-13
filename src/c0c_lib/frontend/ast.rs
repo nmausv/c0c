@@ -1,17 +1,17 @@
 // top level
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub name: String,
     pub body: Vec<Stmt>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
     Body(Vec<Stmt>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Declare(Ident, Type),
     DeclareAssign(Ident, Type, Exp),
@@ -20,7 +20,7 @@ pub enum Stmt {
     Return(Exp),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Exp {
     Num(Num),
     Ident(Ident),
@@ -28,7 +28,7 @@ pub enum Exp {
 }
 
 // Operators
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinOp {
     Plus,
     Minus,
@@ -37,7 +37,7 @@ pub enum BinOp {
     Modulo,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompareOp {
     Less,
     LessEq,
@@ -47,7 +47,7 @@ pub enum CompareOp {
     NotEq,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AsnOp {
     Eq,
     PlusEq,
@@ -58,7 +58,7 @@ pub enum AsnOp {
 }
 
 // Types
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
     Char,

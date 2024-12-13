@@ -29,7 +29,7 @@ Stmt: Stmt = {
 
 Decl: Stmt = {
   "int" <Ident> => Stmt::Declare(<>, Type::Int),
-  "int" <i:Ident> <e:Exp> => Stmt::DeclareAssign(i, Type::Int, e),
+  "int" <i:Ident> "=" <e:Exp> => Stmt::DeclareAssign(i, Type::Int, e),
 }
 
 Simp: Stmt = {
@@ -76,7 +76,7 @@ Num: i32 = {
 
 // 0 | [1-9][0-9]*
 DecNum: i32 = {
-  <r"(0|[1-9][0-9]+)"> => {
+  <r"(0|[1-9][0-9]*)"> => {
     i32::from_str_radix(<>, 10).expect("should be valid decimal number")
   }
 };
