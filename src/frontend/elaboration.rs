@@ -1,19 +1,17 @@
-// Translates parsed syntax into the first AST with semantic information
+// Elaborates parsed syntax into the first AST with semantic information
 
 use std::collections::VecDeque;
 
 use super::ast;
 use super::elab_ast;
 
-#[allow(unused_variables)]
-
-fn translate_binop(
+fn elaborate_binop(
     eleft: &ast::Exp,
     binop: &ast::BinOp,
     eright: &ast::Exp,
 ) -> elab_ast::Exp {
-    let elab_left = Box::new(translate_exp(eleft));
-    let elab_right = Box::new(translate_exp(eright));
+    let elab_left = Box::new(elaborate_exp(eleft));
+    let elab_right = Box::new(elaborate_exp(eright));
     match binop {
         ast::BinOp::Plus => elab_ast::Exp::PureBinop(
             elab_left,
@@ -43,22 +41,21 @@ fn translate_binop(
     }
 }
 
-fn translate_exp(exp: &ast::Exp) -> elab_ast::Exp {
+fn elaborate_exp(exp: &ast::Exp) -> elab_ast::Exp {
     match exp {
         ast::Exp::Num(n) => elab_ast::Exp::Num(*n),
         ast::Exp::Ident(name) => elab_ast::Exp::Ident(name.clone()),
-        ast::Exp::BinOp(e1, binop, e2) => translate_binop(e1, binop, e2),
+        ast::Exp::BinOp(e1, binop, e2) => elaborate_binop(e1, binop, e2),
     }
 }
 
-fn translate_stmts(stmts: &[ast::Stmt]) -> elab_ast::Stmt {
-    if stmts.is_empty() {
-        return elab_ast::Stmt::Nop;
-    }
+fn elaborate_stmts(stmts: &[ast::Stmt]) -> elab_ast::Stmt {
+    let (first, rest) = match stmts.split_first() {
+        None => return elab_ast::Stmt::Nop,
+        Some(x) => x,
+    };
 
-    let (first, rest) = stmts.split_first().unwrap();
-
-    let elab_rest = translate_stmts(rest);
+    let elab_rest = elaborate_stmts(rest);
 
     match first {
         ast::Stmt::Declare(name, t) => {
@@ -76,7 +73,7 @@ fn translate_stmts(stmts: &[ast::Stmt]) -> elab_ast::Stmt {
             };
             seq_rest.push_front(elab_ast::Stmt::Assign(
                 name.clone(),
-                translate_exp(exp),
+                elaborate_exp(exp),
             ));
             elab_ast::Stmt::Declare(
                 name.clone(),
@@ -86,31 +83,31 @@ fn translate_stmts(stmts: &[ast::Stmt]) -> elab_ast::Stmt {
         }
         ast::Stmt::Assign(name, asnop, exp) => {
             let elab_exp = match asnop {
-                ast::AsnOp::Eq => translate_exp(exp),
+                ast::AsnOp::Eq => elaborate_exp(exp),
                 ast::AsnOp::PlusEq => elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Ident(name.clone())),
                     elab_ast::PureBinOp::Plus,
-                    Box::new(translate_exp(exp)),
+                    Box::new(elaborate_exp(exp)),
                 ),
                 ast::AsnOp::MinusEq => elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Ident(name.clone())),
                     elab_ast::PureBinOp::Minus,
-                    Box::new(translate_exp(exp)),
+                    Box::new(elaborate_exp(exp)),
                 ),
                 ast::AsnOp::TimesEq => elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Ident(name.clone())),
                     elab_ast::PureBinOp::Times,
-                    Box::new(translate_exp(exp)),
+                    Box::new(elaborate_exp(exp)),
                 ),
                 ast::AsnOp::DivEq => elab_ast::Exp::ImpureBinop(
                     Box::new(elab_ast::Exp::Ident(name.clone())),
                     elab_ast::ImpureBinOp::Divide,
-                    Box::new(translate_exp(exp)),
+                    Box::new(elaborate_exp(exp)),
                 ),
                 ast::AsnOp::ModEq => elab_ast::Exp::ImpureBinop(
                     Box::new(elab_ast::Exp::Ident(name.clone())),
                     elab_ast::ImpureBinOp::Modulo,
-                    Box::new(translate_exp(exp)),
+                    Box::new(elaborate_exp(exp)),
                 ),
             };
             let mut seq_rest = match elab_rest {
@@ -126,7 +123,7 @@ fn translate_stmts(stmts: &[ast::Stmt]) -> elab_ast::Stmt {
             elab_ast::Stmt::Seq(seq_rest)
         }
         ast::Stmt::Block(b) => {
-            let new_first = translate_stmts(b);
+            let new_first = elaborate_stmts(b);
             match (new_first, elab_rest) {
                 (
                     elab_ast::Stmt::Seq(mut seq1),
@@ -161,15 +158,15 @@ fn translate_stmts(stmts: &[ast::Stmt]) -> elab_ast::Stmt {
                     new_rest
                 }
             };
-            seq_rest.push_front(elab_ast::Stmt::Return(translate_exp(exp)));
+            seq_rest.push_front(elab_ast::Stmt::Return(elaborate_exp(exp)));
             elab_ast::Stmt::Seq(seq_rest)
         }
     }
 }
 
-pub fn translate(program: ast::Program) -> elab_ast::Stmt {
+pub fn elaborate(program: ast::Program) -> elab_ast::Stmt {
     // assert that main function is identified as main
     assert!(program.name == "main");
 
-    translate_stmts(&program.body)
+    elaborate_stmts(&program.body)
 }

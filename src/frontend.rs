@@ -1,4 +1,4 @@
-mod ast;
+pub mod ast;
 
 // hand rolled lexer/regex
 // pub mod lexer;
@@ -11,12 +11,11 @@ use self::lalrpop_util::lalrpop_mod;
 lalrpop_mod!(
     #[allow(clippy::ptr_arg)]
     #[rustfmt::skip]
-    c0parser,
-    "/c0c_lib/frontend/c0parser.rs"
-);
+    pub c0parser,
+    "/frontend/c0parser.rs");
 
-mod elab_ast;
-mod translate;
+pub mod elab_ast;
+pub mod elaboration;
 
 #[cfg(test)]
 mod parser_tests {
@@ -88,10 +87,10 @@ mod parser_tests {
 }
 
 #[cfg(test)]
-mod translate_tests {
+mod elaborate_tests {
     use super::c0parser::ProgramParser;
     use super::elab_ast;
-    use super::translate::translate;
+    use super::elaboration::elaborate;
 
     #[test]
     fn empty_main() {
@@ -100,7 +99,7 @@ mod translate_tests {
         let ast = parser.parse(input);
         dbg!(&ast);
         assert!(ast.is_ok());
-        let elab_ast = translate(ast.unwrap());
+        let elab_ast = elaborate(ast.unwrap());
         dbg!(&elab_ast);
         assert!(elab_ast == elab_ast::Stmt::Nop);
     }
@@ -112,7 +111,7 @@ mod translate_tests {
         let ast = parser.parse(input);
         dbg!(&ast);
         assert!(ast.is_ok());
-        let elab_ast = translate(ast.unwrap());
+        let elab_ast = elaborate(ast.unwrap());
         dbg!(&elab_ast);
         //TODO
         assert!(true);
@@ -125,7 +124,7 @@ mod translate_tests {
         let ast = parser.parse(input);
         dbg!(&ast);
         assert!(ast.is_ok());
-        let elab_ast = translate(ast.unwrap());
+        let elab_ast = elaborate(ast.unwrap());
         dbg!(&elab_ast);
         assert!(
             elab_ast
@@ -135,5 +134,23 @@ mod translate_tests {
                     Box::new(elab_ast::Stmt::Nop)
                 )
         );
+    }
+
+    #[test]
+    fn double_declare_scopes() {
+        let input_scope = "int main(){int x = 0; { int x = 1; } return x;}";
+        let input_noscope = "int main(){int x = 0; int x = 1; return x;}";
+        let parser = ProgramParser::new();
+        let ast_scope = parser.parse(input_scope);
+        let ast_noscope = parser.parse(input_noscope);
+        assert!(ast_scope.is_ok());
+        assert!(ast_noscope.is_ok());
+        dbg!(&ast_scope);
+        dbg!(&ast_noscope);
+        let elab_scope = elaborate(ast_scope.unwrap());
+        let elab_noscope = elaborate(ast_noscope.unwrap());
+        dbg!(&elab_scope);
+        dbg!(&elab_noscope);
+        assert!(elab_scope != elab_noscope);
     }
 }
