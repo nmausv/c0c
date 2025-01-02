@@ -2,6 +2,7 @@
 
 mod codegen;
 mod frontend;
+mod regalloc;
 mod static_analysis;
 mod temps;
 mod translation;
