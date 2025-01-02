@@ -14,7 +14,7 @@ impl std::fmt::Display for Program {
             .iter()
             .map(|s| write!(f, "{s}\n"))
             .collect::<Vec<_>>();
-        write!(f, "}}")
+        write!(f, "}} end of {}", self.name)
     }
 }
 
