@@ -7,8 +7,7 @@ use super::ast::*;
 
 pub Program: Program = {
     "int" <i:Ident> "(" ")" <b:Block> => {
-      let stmts = b;
-      Program {name: i, body:stmts}
+      Program {name: i, body: b}
     }
 };
 
@@ -18,42 +17,104 @@ Block: Vec<Stmt> = {
 
 Stmt: Stmt = {
   <Block> => Stmt::Block(<>),
-  <Decl> ";" => <>,
   <Simp> ";" => <>,
-  "return" <Exp> ";" => Stmt::Return(<>),
+  <Control> => <>,
 }
 
 Decl: Stmt = {
-  "int" <Ident> => Stmt::Declare(<>, Type::Int),
-  "int" <i:Ident> "=" <e:Exp> => Stmt::DeclareAssign(i, Type::Int, e),
+  <t:Type> <i:Ident> => Stmt::Declare(i, t),
+  <t:Type> <i:Ident> "=" <e:Exp> => Stmt::DeclareAssign(i, t, e),
 }
 
 Simp: Stmt = {
+#[precedence(level="0")]
+  <Decl> => <>,
+  <Exp> => Stmt::Exp(<>),
+
+#[precedence(level="1")] #[assoc(side="right")]
+  <v:lvalue> <op:PostOp> => Stmt::PostOp(v, op),
+
+#[precedence(level="2")] #[assoc(side="right")]
   <v:lvalue> <op:AsnOp> <e:Exp> => Stmt::Assign(v, op, e),
 }
 
 lvalue: Ident = {
   <Ident> => <>,
-  "(" <Ident> ")" => <>,
+  "(" <lvalue> ")" => <>,
+}
+
+Control: Stmt = {
+  "if" "(" <cond:Exp> ")" <st:Stmt> <sf:Elseopt> => Stmt::If{cond, branch_true: st, branch_false: sf},
+  "while" "(" <cond:Exp> ")" <body:Stmt> => Stmt::While{cond, body},
+  "for" "(" <init:Simpopt> ";" <cond:Exp> ";" <step:Simpopt> ")" <body:Stmt> => Stmt::For{init, cond, step, body},
+  "return" <Exp> ";" => Stmt::Return(<>),
+}
+
+Simpopt: Option<Box<Stmt>> = {
+  "" => None,
+  <Simp> => Some(Box::new(<>)),
+}
+
+Elseopt: Option<Box<Stmt>> = {
+  "" => None,
+  "else" <Stmt> => Some(Box::new(<>)),
 }
 
 Exp: Exp = {
 #[precedence(level="0")]
   "(" <Exp> ")" => <>,
   <Num> => Exp::Num(<>),
-  <Ident> => Exp::Ident(<>),
 
+// lvalue conversion has lower precedence than parentheses to prioritize
+// keeping lvalues as lvalues in instances like `((x)) = 2;`
 #[precedence(level="1")] #[assoc(side="right")]
-  "-" <Exp> => Exp::BinOp(Box::new(Exp::Num(0)), BinOp::Minus, Box::new(<>)),
+  <lvalue> => Exp::Ident(<>),
 
-#[precedence(level="2")] #[assoc(side="left")]
+#[precedence(level="2")] #[assoc(side="right")]
+  "!" <Exp> => Exp::UnOp(UnOp::LogNegate, Box::new(<>)),
+  "~" <Exp> => Exp::UnOp(UnOp::BitNegate, Box::new(<>)),
+  "-" <Exp> => Exp::UnOp(UnOp::Negative, Box::new(<>)),
+
+#[precedence(level="3")] #[assoc(side="left")]
   <el:Exp> "*" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Times, Box::new(er)),
   <el:Exp> "/" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Divide, Box::new(er)),
   <el:Exp> "%" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Modulo, Box::new(er)),
 
-#[precedence(level="3")] #[assoc(side="left")]
+#[precedence(level="4")] #[assoc(side="left")]
   <el:Exp> "+" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Plus, Box::new(er)),
   <el:Exp> "-" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Minus, Box::new(er)),
+
+#[precedence(level="5")] #[assoc(side="left")]
+  <el:Exp> "<<" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Shl, Box::new(er)),
+  <el:Exp> ">>" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Shr, Box::new(er)),
+
+#[precedence(level="6")] #[assoc(side="left")]
+  <el:Exp> "<" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Less, Box::new(er)),
+  <el:Exp> "<=" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::LessEq, Box::new(er)),
+  <el:Exp> ">" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Greater, Box::new(er)),
+  <el:Exp> ">=" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::GreaterEq, Box::new(er)),
+
+#[precedence(level="7")] #[assoc(side="left")]
+  <el:Exp> "==" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Eq, Box::new(er)),
+  <el:Exp> "!=" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::NotEq, Box::new(er)),
+
+#[precedence(level="8")] #[assoc(side="left")]
+  <el:Exp> "&" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::BitAnd, Box::new(er)),
+
+#[precedence(level="9")] #[assoc(side="left")]
+  <el:Exp> "^" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::BitXor, Box::new(er)),
+
+#[precedence(level="10")] #[assoc(side="left")]
+  <el:Exp> "|" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::BitOr, Box::new(er)),
+
+#[precedence(level="11")] #[assoc(side="left")]
+  <el:Exp> "&&" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::LogAnd, Box::new(er)),
+
+#[precedence(level="12")] #[assoc(side="left")]
+  <el:Exp> "||" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::LogOr, Box::new(er)),
+
+#[precedence(level="13")] #[assoc(side="right")]
+  <ec:Exp> "?" <et:Exp> ":" <ef:Exp> => Exp::Ternary(Box::new(ec), Box::new(et), Box::new(ef))
 }
 
 AsnOp: AsnOp = {
@@ -63,6 +124,16 @@ AsnOp: AsnOp = {
   "*=" => AsnOp::TimesEq,
   "/=" => AsnOp::DivEq,
   "%=" => AsnOp::ModEq,
+  "&=" => AsnOp::AndEq,
+  "^=" => AsnOp::XorEq,
+  "|=" => AsnOp::OrEq,
+  "<<=" => AsnOp::ShlEq,
+  ">>=" => AsnOp::ShrEq,
+}
+
+PostOp: PostOp = {
+  "++" => PostOp::PlusPlus,
+  "--" => PostOp::MinusMinus,
 }
 
 Num: i32 = {
@@ -86,3 +157,8 @@ HexNum: i32 = {
 
 // [A-Za-z_][A-Za-z0-9_]*
 Ident: String = <s:r"[A-Za-z_][A-Za-z0-9_]*"> => String::from(s);
+
+Type: Type = {
+  "int" => Type::Int,
+  "bool" => Type::Bool,
+};
