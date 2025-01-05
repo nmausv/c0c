@@ -1,6 +1,6 @@
 
 # Global
-- [ ] pretty print functionality
+- [x] pretty print functionality
 
 # Front End
 
@@ -16,17 +16,28 @@
     - should fix the line/column number problem
 
 ## LALRPOP
+- [x] enable comments
 - [x] create `ast` types for LALRPOP to parse into
+- [x] add L2 additions to parser
+    - [x] Control
+        - [x] If
+            - [x] handle dangling else via open/closed statements
+        - [x] For
+        - [x] While
+    - [x] binops
+    - [x] unops
+    - [x] postops
 
 ## Translation
 - [x] create `elab_ast` types which have scope information
 - [x] write `translate` function to convert `ast` to `elab_ast`
+    - [x] elaborate `for` loops into equivalent `while` loops (with proper scoping)
 
 # Static Semantics
 
 ## Initialization
 - [x] ensure variables are defined before being used, and `return`s define all and only variables currently in scope
-- [ ] are double declares allowed? for instance:
+- [x] are double declares allowed? for instance:
     ```c
     int main() {
         int x = 0;
@@ -52,6 +63,7 @@
     }
     ```
     is valid and returns 1.
+    for now I'll just disallow double declares entirely, but I could allow shadowing in the future
 - [>] tests
     - [x] check double `declare`, something like `Declare(x, int, Seq([Declare(x, int, Nop), Assign(x, x)]))`
 
@@ -65,3 +77,8 @@
 - [x] separate between commands (impure) and expressions (pure)
 - [>] tests
     - [ ] TODO
+
+# Code Generation
+
+## Abstract Assembly
+- [x] write a lightweight runner to allow end to end testing

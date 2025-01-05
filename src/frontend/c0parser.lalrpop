@@ -1,30 +1,54 @@
-grammar;
-
-// Macros
-
 // Main
 use super::ast::*;
 
+grammar;
+
+match {
+  _,
+  r"\s*" => { }, // The default whitespace skipping is disabled if an `ignore pattern` is specified
+  r"//[^\n\r]*[\n\r]*" => { }, // Skip `// comments`
+  r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/" => { },  // Skip `/* comments */`
+}
+
 pub Program: Program = {
-    "int" <i:Ident> "(" ")" <b:Block> => {
-      Program {name: i, body: b}
-    }
+  "int" <i:Ident> "(" ")" <b:Block> => Program {name: i, body: b},
 };
 
 Block: Vec<Stmt> = {
-    "{" <Stmt*> "}" => <>
+  "{" <Stmt*> "}" => <>,
 };
 
 Stmt: Stmt = {
-  <Block> => Stmt::Block(<>),
+  <OpenStmt> => <>,
+  <ClosedStmt> => <>,
+};
+
+ClosedStmt: Stmt = {
   <Simp> ";" => <>,
-  <Control> => <>,
+  "return" <Exp> ";" => Stmt::Return(<>),
+  <Block> => Stmt::Block(<>),
+  "if" "(" <cond:Exp> ")" <st:ClosedStmt> "else" <sf:ClosedStmt> => Stmt::If{cond, branch_true: Box::new(st), branch_false: Some(Box::new(sf))},
+  "while" "(" <cond:Exp> ")" <body:ClosedStmt> => Stmt::While{cond, body: Box::new(body)},
+  "for" "(" ";" <cond:Exp> ";" ")" <body:ClosedStmt> => Stmt::For{init: None, cond, step: None, body: Box::new(body)},
+  "for" "(" <init:Simp> ";" <cond:Exp> ";" ")" <body:ClosedStmt> => Stmt::For{init: Some(Box::new(init)), cond, step: None, body: Box::new(body)},
+  "for" "(" ";" <cond:Exp> ";" <step:Simp> ")" <body:ClosedStmt> => Stmt::For{init: None, cond, step: Some(Box::new(step)), body: Box::new(body)},
+  "for" "(" <init:Simp> ";" <cond:Exp> ";" <step:Simp> ")" <body:ClosedStmt> => Stmt::For{init: Some(Box::new(init)), cond, step: Some(Box::new(step)), body: Box::new(body)},
+};
+
+OpenStmt: Stmt = {
+  "if" "(" <cond:Exp> ")" <st:ClosedStmt> "else" <sf:OpenStmt> => Stmt::If{cond, branch_true: Box::new(st), branch_false: Some(Box::new(sf))},
+  "if" "(" <cond:Exp> ")" <st:Stmt> => Stmt::If{cond, branch_true: Box::new(st), branch_false: None},
+  "while" "(" <cond:Exp> ")" <body:OpenStmt> => Stmt::While{cond, body: Box::new(body)},
+  "for" "(" ";" <cond:Exp> ";" ")" <body:OpenStmt> => Stmt::For{init: None, cond, step: None, body: Box::new(body)},
+  "for" "(" <init:Simp> ";" <cond:Exp> ";" ")" <body:OpenStmt> => Stmt::For{init: Some(Box::new(init)), cond, step: None, body: Box::new(body)},
+  "for" "(" ";" <cond:Exp> ";" <step:Simp> ")" <body:OpenStmt> => Stmt::For{init: None, cond, step: Some(Box::new(step)), body: Box::new(body)},
+  "for" "(" <init:Simp> ";" <cond:Exp> ";" <step:Simp> ")" <body:OpenStmt> => Stmt::For{init: Some(Box::new(init)), cond, step: Some(Box::new(step)), body: Box::new(body)},
 }
 
 Decl: Stmt = {
   <t:Type> <i:Ident> => Stmt::Declare(i, t),
   <t:Type> <i:Ident> "=" <e:Exp> => Stmt::DeclareAssign(i, t, e),
-}
+};
 
 Simp: Stmt = {
 #[precedence(level="0")]
@@ -36,29 +60,12 @@ Simp: Stmt = {
 
 #[precedence(level="2")] #[assoc(side="right")]
   <v:lvalue> <op:AsnOp> <e:Exp> => Stmt::Assign(v, op, e),
-}
+};
 
 lvalue: Ident = {
   <Ident> => <>,
   "(" <lvalue> ")" => <>,
-}
-
-Control: Stmt = {
-  "if" "(" <cond:Exp> ")" <st:Stmt> <sf:Elseopt> => Stmt::If{cond, branch_true: st, branch_false: sf},
-  "while" "(" <cond:Exp> ")" <body:Stmt> => Stmt::While{cond, body},
-  "for" "(" <init:Simpopt> ";" <cond:Exp> ";" <step:Simpopt> ")" <body:Stmt> => Stmt::For{init, cond, step, body},
-  "return" <Exp> ";" => Stmt::Return(<>),
-}
-
-Simpopt: Option<Box<Stmt>> = {
-  "" => None,
-  <Simp> => Some(Box::new(<>)),
-}
-
-Elseopt: Option<Box<Stmt>> = {
-  "" => None,
-  "else" <Stmt> => Some(Box::new(<>)),
-}
+};
 
 Exp: Exp = {
 #[precedence(level="0")]
@@ -114,8 +121,8 @@ Exp: Exp = {
   <el:Exp> "||" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::LogOr, Box::new(er)),
 
 #[precedence(level="13")] #[assoc(side="right")]
-  <ec:Exp> "?" <et:Exp> ":" <ef:Exp> => Exp::Ternary(Box::new(ec), Box::new(et), Box::new(ef))
-}
+  <ec:Exp> "?" <et:Exp> ":" <ef:Exp> => Exp::Ternary{cond: Box::new(ec), branch_true: Box::new(et), branch_false: Box::new(ef)}
+};
 
 AsnOp: AsnOp = {
   "=" => AsnOp::Eq,
@@ -129,17 +136,17 @@ AsnOp: AsnOp = {
   "|=" => AsnOp::OrEq,
   "<<=" => AsnOp::ShlEq,
   ">>=" => AsnOp::ShrEq,
-}
+};
 
 PostOp: PostOp = {
   "++" => PostOp::PlusPlus,
   "--" => PostOp::MinusMinus,
-}
+};
 
 Num: i32 = {
   <DecNum> => <>,
   <HexNum> => <>,
-}
+};
 
 // 0 | [1-9][0-9]*
 DecNum: i32 = {

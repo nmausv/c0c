@@ -1,5 +1,3 @@
-// top level
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub name: String,
@@ -50,7 +48,7 @@ impl std::fmt::Display for Stmt {
             Self::Declare(var, t) => write!(f, "{t} {var};"),
             Self::DeclareAssign(var, t, exp) => write!(f, "{t} {var} = {exp};"),
             Self::Assign(var, op, exp) => write!(f, "{var} {op} {exp};"),
-            Self::PostOp(var, op) => write!(f, "{var} {op};"),
+            Self::PostOp(var, op) => write!(f, "{var}{op};"),
             Self::Return(exp) => write!(f, "return {exp};"),
             Self::Exp(exp) => write!(f, "{exp};"),
             Self::Block(v) => v.iter().map(|s| write!(f, "{s}\n")).collect(),
@@ -60,13 +58,13 @@ impl std::fmt::Display for Stmt {
                 branch_false: Some(branch_false),
             } => write!(
                 f,
-                "if ({cond}) {{\n{branch_true}\n}} else {{\n{branch_false}\n}}"
+                "if ({cond}) {{start if body\n{branch_true}\nend if body}} else {{start else body\n{branch_false}\nend else body}}"
             ),
             Self::If {
                 cond,
                 branch_true,
                 branch_false: None,
-            } => write!(f, "if ({cond}) {{\n{branch_true}\n}}"),
+            } => write!(f, "if ({cond}) {{start if body\n{branch_true}\nend if body}}"),
             Self::For {
                 init,
                 cond,
@@ -83,11 +81,11 @@ impl std::fmt::Display for Stmt {
                 };
                 write!(
                     f,
-                    "for ({init_string}; {cond}; {step_string}) {{\n{body}\n}}"
+                    "for ({{{init_string}}}; {cond}; {{{step_string}}}) {{start for body\n{body}\nend for body}}"
                 )
             }
             Self::While { cond, body } => {
-                write!(f, "while ({cond}) {{\n{body}\n}}")
+                write!(f, "while ({cond}) {{start while body\n{body}\nend while body}}")
             }
         }
     }
