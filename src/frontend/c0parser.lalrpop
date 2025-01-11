@@ -71,6 +71,8 @@ Exp: Exp = {
 #[precedence(level="0")]
   "(" <Exp> ")" => <>,
   <Num> => Exp::Num(<>),
+  "true" => Exp::True,
+  "false" => Exp::False,
 
 // lvalue conversion has lower precedence than parentheses to prioritize
 // keeping lvalues as lvalues in instances like `((x)) = 2;`
