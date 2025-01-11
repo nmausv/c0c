@@ -1,78 +1,133 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::frontend::elab_ast;
+use crate::frontend::elab_ast::{Exp, Ident, Program, Stmt, Type};
 
-type VarSet = HashSet<elab_ast::Ident>;
-type TypeMap = HashMap<elab_ast::Ident, elab_ast::Type>;
+type VarSet = HashSet<Ident>;
+type TypeMap = HashMap<Ident, Type>;
 
 // true if and only if the expression uses only variables in the set
-fn exp_uses(exp: &elab_ast::Exp, defined: &VarSet) -> bool {
+fn exp_uses_only(exp: &Exp, initialized: &VarSet) -> bool {
     match exp {
-        elab_ast::Exp::Num(_) => true,
-        elab_ast::Exp::Ident(x) => defined.contains(x),
-        elab_ast::Exp::PureBinop(e1, _, e2) => {
-            exp_uses(e1, defined) && exp_uses(e2, defined)
+        Exp::Num(_) => true,
+        Exp::True => true,
+        Exp::False => true,
+        Exp::Ident(x) => initialized.contains(x),
+        Exp::PureBinop(e1, _, e2) => {
+            exp_uses_only(e1, initialized) && exp_uses_only(e2, initialized)
         }
-        elab_ast::Exp::ImpureBinop(e1, _, e2) => {
-            exp_uses(e1, defined) && exp_uses(e2, defined)
+        Exp::ImpureBinop(e1, _, e2) => {
+            exp_uses_only(e1, initialized) && exp_uses_only(e2, initialized)
+        }
+        Exp::UnOp(_, e) => exp_uses_only(e, initialized),
+        Exp::Ternary {
+            cond,
+            branch_true,
+            branch_false,
+        } => {
+            exp_uses_only(cond, initialized)
+                && exp_uses_only(branch_true, initialized)
+                && exp_uses_only(branch_false, initialized)
         }
     }
 }
 
 #[derive(Clone)]
 struct StmtEnv {
-    defined: VarSet,
-    types: TypeMap,
+    initialized: VarSet,
+    inscope: TypeMap,
 }
 
 /// Given an environment `env` and a statment `s`, returns a new environment `s'`
-/// if `s` assigns only to variables in the scope of `env`, and uses only variables defined in `env`,
+/// if `s` assigns only to variables in the scope of `env`, and uses only variables initialized in `env`,
 /// leaving a resulting environment of `s'`.
-fn stmt_initializes(mut env: StmtEnv, s: &elab_ast::Stmt) -> Option<StmtEnv> {
+fn stmt_initializes(mut env: StmtEnv, s: &Stmt) -> Option<StmtEnv> {
     match s {
-        elab_ast::Stmt::Nop => Some(env),
-        elab_ast::Stmt::Seq(v) => {
+        Stmt::Nop => Some(env),
+        Stmt::Seq(v) => {
             let mut intermediary = env;
             for s in v {
                 intermediary = stmt_initializes(intermediary, s)?;
             }
             Some(intermediary)
         }
-        elab_ast::Stmt::Assign(x, e) => {
-            if env.types.contains_key(x) && exp_uses(e, &env.defined) {
-                env.defined.insert(x.clone());
+        Stmt::Assign(x, e) => {
+            if env.inscope.contains_key(x) && exp_uses_only(e, &env.initialized) {
+                env.initialized.insert(x.clone());
                 Some(env)
             } else {
-                if !env.types.contains_key(x) {
+                if !env.inscope.contains_key(x) {
                     println!("assignment to variable not in scope");
                 } else {
-                    println!("assignment uses variables not yet defined");
+                    println!("assignment uses variables not yet initialized");
                 }
                 None
             }
         }
-        elab_ast::Stmt::Return(e) => {
-            if exp_uses(e, &env.defined) {
-                env.defined.drain();
-                for key in env.types.keys() {
-                    env.defined.insert(key.clone());
+        Stmt::Return(e) => {
+            if exp_uses_only(e, &env.initialized) {
+                env.initialized.drain();
+                for key in env.inscope.keys() {
+                    env.initialized.insert(key.clone());
                 }
                 Some(env)
             } else {
                 None
             }
         }
-        elab_ast::Stmt::Declare(x, t, scope) => {
+        Stmt::Declare(x, t, scope) => {
             // since double declares are not allowed, check that x is not already in scope
-            if env.types.contains_key(x) {
+            if env.inscope.contains_key(x) {
                 println!("double declaration");
                 return None;
             }
-            env.types.insert(x.clone(), *t);
+            env.inscope.insert(x.clone(), *t);
             let mut new_env = stmt_initializes(env, scope)?;
-            new_env.types.remove(x);
-            new_env.defined.remove(x);
+            new_env.inscope.remove(x);
+            new_env.initialized.remove(x);
             Some(new_env)
+        }
+        Stmt::Exp(_) => Some(env),
+        Stmt::If {
+            cond,
+            branch_true,
+            branch_false,
+        } => {
+            if !exp_uses_only(cond, &env.initialized) {
+                return None;
+            }
+
+            // at least one clone is necessary since if bodies may mutate the environment
+            // if we only use one clone, we need to clone the previous inscope anyway
+            // because we need to make sure that variables declared in the branches
+            // aren't valid in scope outside those branches
+            let env_true = stmt_initializes(env.clone(), branch_true)?;
+            let env_false = stmt_initializes(env.clone(), branch_false)?;
+
+            // note:
+            // right now this code is obvious in what it does, at the cost of some efficiency.
+            // cloning the intersection is possibly slow, especially when the two environments
+            // are about to go out of scope and be dropped anyway
+
+            Some(StmtEnv {
+                initialized: env_true
+                    .initialized
+                    .intersection(&env_false.initialized)
+                    .cloned()
+                    .collect(),
+                inscope: env.inscope,
+            })
+        }
+        Stmt::While { cond, body } => {
+            if !exp_uses_only(cond, &env.initialized) {
+                return None;
+            }
+
+            // clone is necessary since the while body may mutate the environment,
+            // but we only want it to mutate the local environment since the body
+            // may not be called
+            let _ = stmt_initializes(env.clone(), body)?;
+
+            Some(env)
         }
     }
 }
@@ -88,13 +143,13 @@ fn stmt_initializes(mut env: StmtEnv, s: &elab_ast::Stmt) -> Option<StmtEnv> {
 /// ```
 /// are valid, even though `x` is used before being initialized at (2).
 /// Note that variables not in scope are not initialized, so removing line (1) is not valid.
-pub fn initialization_check(elab_program: &elab_ast::Stmt) -> bool {
+pub fn initialization_check(elab_program: &Program) -> bool {
     let env = StmtEnv {
-        types: HashMap::new(),
-        defined: HashSet::new(),
+        inscope: HashMap::new(),
+        initialized: HashSet::new(),
     };
 
-    match stmt_initializes(env, elab_program) {
+    match stmt_initializes(env, elab_program.as_ref()) {
         None => false,
         Some(_) => true,
     }
@@ -105,58 +160,62 @@ mod init_tests {
     use std::collections::VecDeque;
 
     use super::*;
-    use elab_ast::*;
+    use crate::frontend::elab_ast::*;
 
     #[test]
     fn empty_main() {
-        let program = Stmt::Return(Exp::Num(0));
+        let program: Program = Stmt::Return(Exp::Num(0)).into();
         assert!(initialization_check(&program));
     }
 
     #[test]
     fn declare_only() {
-        let program = Stmt::Declare(
+        let program: Program = Stmt::Declare(
             String::from("x"),
             Type::Int,
             Box::new(Stmt::Return(Exp::Num(0))),
-        );
+        )
+        .into();
         assert!(initialization_check(&program));
     }
 
     #[test]
     fn use_before_declare() {
-        let program = Stmt::Seq(VecDeque::from(vec![
+        let program: Program = Stmt::Seq(VecDeque::from(vec![
             Stmt::Assign(String::from("x"), Exp::Ident(String::from("x"))),
             Stmt::Return(Exp::Num(0)),
-        ]));
+        ]))
+        .into();
         assert!(!initialization_check(&program));
     }
 
     #[test]
     fn use_out_of_scope() {
-        let program = Stmt::Seq(VecDeque::from(vec![
+        let program: Program = Stmt::Seq(VecDeque::from(vec![
             Stmt::Declare(String::from("x"), Type::Int, Box::new(Stmt::Nop)),
             Stmt::Assign(String::from("x"), Exp::Ident(String::from("x"))),
-        ]));
+        ]))
+        .into();
         assert!(!initialization_check(&program));
     }
 
     #[test]
     fn use_after_return() {
-        let program = Stmt::Declare(
+        let program: Program = Stmt::Declare(
             String::from("x"),
             Type::Int,
             Box::new(Stmt::Seq(VecDeque::from(vec![
                 Stmt::Return(Exp::Num(0)),
                 Stmt::Assign(String::from("x"), Exp::Ident(String::from("x"))),
             ]))),
-        );
+        )
+        .into();
         assert!(initialization_check(&program));
     }
 
     #[test]
     fn use_with_declare_after_return() {
-        let program = Stmt::Seq(VecDeque::from(vec![
+        let program: Program = Stmt::Seq(VecDeque::from(vec![
             Stmt::Return(Exp::Num(0)),
             Stmt::Declare(
                 String::from("x"),
@@ -169,7 +228,8 @@ mod init_tests {
                     ),
                 ]))),
             ),
-        ]));
+        ]))
+        .into();
         assert!(initialization_check(&program));
     }
 
@@ -177,7 +237,7 @@ mod init_tests {
     fn double_declare() {
         // NOT VALID
         // int main() {int x = 0; int x = 1; x = x;}
-        let program_noscope = Stmt::Declare(
+        let program_noscope: Program = Stmt::Declare(
             String::from("x"),
             Type::Int,
             Box::new(Stmt::Seq(VecDeque::from(vec![
@@ -189,12 +249,13 @@ mod init_tests {
                 ),
                 Stmt::Assign(String::from("x"), Exp::Ident(String::from("x"))),
             ]))),
-        );
+        )
+        .into();
         assert!(!initialization_check(&program_noscope));
 
         // VALID
         // int main() {{int x = 0;} int x = 1; x = x;}
-        let program_scope = Stmt::Seq(VecDeque::from(vec![
+        let program_scope: Program = Stmt::Seq(VecDeque::from(vec![
             Stmt::Declare(
                 String::from("x"),
                 Type::Int,
@@ -208,7 +269,8 @@ mod init_tests {
                     Stmt::Return(Exp::Ident(String::from("x"))),
                 ]))),
             ),
-        ]));
+        ]))
+        .into();
         assert!(initialization_check(&program_scope));
     }
 }

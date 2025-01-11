@@ -4,6 +4,27 @@ use std::collections::VecDeque;
 
 use super::ast;
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Program(Stmt);
+
+impl From<Stmt> for Program {
+    fn from(value: Stmt) -> Self {
+        Self(value)
+    }
+}
+
+impl AsRef<Stmt> for Program {
+    fn as_ref(&self) -> &Stmt {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Declare(Ident, Type, Box<Stmt>),
@@ -23,11 +44,20 @@ pub enum Stmt {
     Exp(Exp),
 }
 
+impl From<Program> for Stmt {
+    fn from(value: Program) -> Self {
+        value.0
+    }
+}
+
 impl std::fmt::Display for Stmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Declare(var, t, scope) => {
-                write!(f, "{{start scope of {t} {var};\n{scope} end scope of {var}}}")
+                write!(
+                    f,
+                    "{{start scope of {t} {var};\n{scope} end scope of {var}}}"
+                )
             }
             Self::Assign(var, exp) => write!(f, "{var} = {exp};"),
             Self::Nop => write!(f, "Nop;"),
@@ -97,8 +127,47 @@ pub enum BinOp {
     Impure(ImpureBinOp),
 }
 
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum OpType {
+    Relational,
+    Equality,
+    Logical,
+    Arithmetic,
+}
+
 impl BinOp {
-    pub fn from(binop: ast::BinOp) -> Self {
+    pub fn signature(self) -> OpType {
+        match self {
+            Self::Pure(PureBinOp::Plus) => OpType::Arithmetic,
+            Self::Pure(PureBinOp::Minus) => OpType::Arithmetic,
+            Self::Pure(PureBinOp::Times) => OpType::Arithmetic,
+            Self::Impure(ImpureBinOp::Divide) => OpType::Arithmetic,
+            Self::Impure(ImpureBinOp::Modulo) => OpType::Arithmetic,
+            Self::Pure(PureBinOp::Less) => OpType::Relational,
+            Self::Pure(PureBinOp::LessEq) => OpType::Relational,
+            Self::Pure(PureBinOp::Greater) => OpType::Relational,
+            Self::Pure(PureBinOp::GreaterEq) => OpType::Relational,
+            Self::Pure(PureBinOp::Eq) => OpType::Equality,
+            Self::Pure(PureBinOp::NotEq) => OpType::Equality,
+            Self::Pure(PureBinOp::LogAnd) => OpType::Logical,
+            Self::Pure(PureBinOp::LogOr) => OpType::Logical,
+            Self::Pure(PureBinOp::BitAnd) => OpType::Arithmetic,
+            Self::Pure(PureBinOp::BitXor) => OpType::Arithmetic,
+            Self::Pure(PureBinOp::BitOr) => OpType::Arithmetic,
+            Self::Impure(ImpureBinOp::Shl) => OpType::Arithmetic,
+            Self::Impure(ImpureBinOp::Shr) => OpType::Arithmetic,
+        }
+    }
+}
+
+impl From<ImpureBinOp> for BinOp {
+    fn from(value: ImpureBinOp) -> Self {
+        Self::Impure(value)
+    }
+}
+
+impl From<ast::BinOp> for BinOp {
+    fn from(binop: ast::BinOp) -> Self {
         match binop {
             ast::BinOp::Plus => Self::Pure(PureBinOp::Plus),
             ast::BinOp::Minus => Self::Pure(PureBinOp::Minus),
@@ -150,36 +219,57 @@ pub enum PureBinOp {
     BitOr,
 }
 
-impl PureBinOp {
-    pub fn forget_purity(self) -> ast::BinOp {
-        match self {
-            Self::Plus => ast::BinOp::Plus,
-            Self::Minus => ast::BinOp::Minus,
-            Self::Times => ast::BinOp::Times,
-            Self::Less => ast::BinOp::Less,
-            Self::LessEq => ast::BinOp::LessEq,
-            Self::Greater => ast::BinOp::Greater,
-            Self::GreaterEq => ast::BinOp::GreaterEq,
-            Self::Eq => ast::BinOp::Eq,
-            Self::NotEq => ast::BinOp::NotEq,
-            Self::LogAnd => ast::BinOp::LogAnd,
-            Self::LogOr => ast::BinOp::LogOr,
-            Self::BitAnd => ast::BinOp::BitAnd,
-            Self::BitXor => ast::BinOp::BitXor,
-            Self::BitOr => ast::BinOp::BitOr,
+impl From<PureBinOp> for ast::BinOp {
+    fn from(value: PureBinOp) -> Self {
+        match value {
+            PureBinOp::Plus => Self::Plus,
+            PureBinOp::Minus => Self::Minus,
+            PureBinOp::Times => Self::Times,
+            PureBinOp::Less => Self::Less,
+            PureBinOp::LessEq => Self::LessEq,
+            PureBinOp::Greater => Self::Greater,
+            PureBinOp::GreaterEq => Self::GreaterEq,
+            PureBinOp::Eq => Self::Eq,
+            PureBinOp::NotEq => Self::NotEq,
+            PureBinOp::LogAnd => Self::LogAnd,
+            PureBinOp::LogOr => Self::LogOr,
+            PureBinOp::BitAnd => Self::BitAnd,
+            PureBinOp::BitXor => Self::BitXor,
+            PureBinOp::BitOr => Self::BitOr,
         }
+    }
+}
+
+impl From<PureBinOp> for BinOp {
+    fn from(value: PureBinOp) -> Self {
+        Self::Pure(value)
+    }
+}
+
+impl PureBinOp {
+    pub fn signature(self) -> OpType {
+        BinOp::signature(self.into())
     }
 }
 
 impl std::fmt::Display for PureBinOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let op = self.forget_purity();
-        write!(f, "{op}")
+        write!(f, "{}", ast::BinOp::from(*self))
     }
 }
 
 // UnOps always have no effects, can reuse the ast definition
 pub type UnOp = super::ast::UnOp;
+
+impl UnOp {
+    pub fn signature(self) -> OpType {
+        match self {
+            Self::Negative => OpType::Arithmetic,
+            Self::LogNegate => OpType::Logical,
+            Self::BitNegate => OpType::Arithmetic,
+        }
+    }
+}
 
 // can raise an exception
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -190,21 +280,26 @@ pub enum ImpureBinOp {
     Shr,
 }
 
-impl ImpureBinOp {
-    pub fn forget_purity(self) -> ast::BinOp {
-        match self {
-            Self::Divide => ast::BinOp::Divide,
-            Self::Modulo => ast::BinOp::Modulo,
-            Self::Shl => ast::BinOp::Shl,
-            Self::Shr => ast::BinOp::Shr,
+impl From<ImpureBinOp> for ast::BinOp {
+    fn from(value: ImpureBinOp) -> Self {
+        match value {
+            ImpureBinOp::Divide => Self::Divide,
+            ImpureBinOp::Modulo => Self::Modulo,
+            ImpureBinOp::Shl => Self::Shl,
+            ImpureBinOp::Shr => Self::Shr,
         }
+    }
+}
+
+impl ImpureBinOp {
+    pub fn signature(self) -> OpType {
+        BinOp::signature(self.into())
     }
 }
 
 impl std::fmt::Display for ImpureBinOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let op = self.forget_purity();
-        write!(f, "{op}")
+        write!(f, "{}", ast::BinOp::from(*self))
     }
 }
 

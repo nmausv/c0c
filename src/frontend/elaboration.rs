@@ -311,9 +311,9 @@ fn elaborate_stmts(stmts: &[ast::Stmt]) -> elab_ast::Stmt {
     elab_ast::Stmt::Seq(seq_rest)
 }
 
-pub fn elaborate(program: ast::Program) -> elab_ast::Stmt {
+pub fn elaborate(program: ast::Program) -> elab_ast::Program {
     // assert that main function is identified as main
     assert!(program.name == "main");
 
-    elaborate_stmts(&program.body)
+    elaborate_stmts(&program.body).into()
 }

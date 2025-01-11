@@ -28,6 +28,7 @@ fn translate_exp(
             c1.push(tree::Command::StoreImpureBinOp(t1.clone(), p1, binop, p2));
             (c1, tree::PureExp::Ident(t1))
         }
+        _ => todo!(),
     }
 }
 
@@ -52,12 +53,13 @@ fn translate_stmt(
             edown
         }
         elab_ast::Stmt::Declare(_, _, scope) => translate_stmt(tf, *scope),
+        _ => todo!(),
     }
 }
 
 pub fn translate(
-    elab: elab_ast::Stmt,
+    elab: elab_ast::Program,
     tf: &mut crate::temps::TempFactory,
 ) -> tree::Program {
-    tree::Program(translate_stmt(tf, elab))
+    tree::Program(translate_stmt(tf, elab.into()))
 }

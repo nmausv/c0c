@@ -78,7 +78,7 @@ pub fn ir_to_abstract(
                 first.push(Instruction::Binop {
                     d: dest,
                     s1: t1,
-                    op: op.forget_purity(),
+                    op: crate::frontend::ast::BinOp::from(op),
                     s2: t2,
                 });
                 first
@@ -107,7 +107,7 @@ pub fn ir_to_abstract(
                 first.push(Instruction::Binop {
                     d: Operand::Temp(var),
                     s1: t1,
-                    op: op.forget_purity(),
+                    op: crate::frontend::ast::BinOp::from(op),
                     s2: t2,
                 });
                 first

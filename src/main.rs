@@ -8,7 +8,22 @@ mod temps;
 mod translation;
 
 fn main() {
-    let program = "int main() {int x = 3 / 4 / 5 / 6 / 7; return x;}";
+    let program = "
+int main() {
+    int x = 0;
+    for (int i = 0; i < 10; i++)
+        x += i;
+
+    // test dangling else
+    if (x * x != 2025)
+        if (x != 45)
+            return -1;
+        else
+            return -2;
+
+    return 0;
+}
+";
     println!("program to compile: \n[{program}]");
 
     let mut tf = temps::TempFactory::new();
@@ -21,7 +36,7 @@ fn main() {
         println!("program failed to typecheck!");
         return;
     }
-    println!("program typechecked!");
+    println!("program passed static analysis!");
 
     let ir_tree = translation::translate(elab_program, &mut tf);
     println!("program translated to:\n{ir_tree}");
