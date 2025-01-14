@@ -15,8 +15,8 @@ int main() {
         x += i;
 
     // test dangling else
-    if (x * x != 2025)
-        if (x != 45)
+    if (x >= 45 && x * x != 2025)
+        if (x == 46)
             return -1;
         else
             return -2;
@@ -26,7 +26,6 @@ int main() {
 ";
     println!("program to compile: \n[{program}]");
 
-    let mut tf = temps::TempFactory::new();
     let parser = frontend::c0parser::ProgramParser::new();
     let program = parser.parse(program).unwrap();
     println!("program parsed as:\n{program}");
@@ -38,6 +37,7 @@ int main() {
     }
     println!("program passed static analysis!");
 
+    let mut tf = temps::TempFactory::new();
     let ir_tree = translation::translate(elab_program, &mut tf);
     println!("program translated to:\n{ir_tree}");
 

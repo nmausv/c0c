@@ -26,13 +26,15 @@ impl std::fmt::Display for Instruction {
     }
 }
 
+use crate::temps::Temp;
+
 pub type Destination = Operand;
 pub type Source = Operand;
 #[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub enum Operand {
     Register(String),
     IntConst(i32),
-    Temp(String),
+    Temp(Temp),
 }
 
 impl std::fmt::Display for Operand {
@@ -66,7 +68,7 @@ pub fn ir_to_abstract(
             PureExp::Ident(x) => {
                 vec![Instruction::Move {
                     d: dest,
-                    s: Operand::Temp(x),
+                    s: Operand::Temp(x.into()),
                 }]
             }
             PureExp::PureBinOp(e1, op, e2) => {
@@ -83,6 +85,7 @@ pub fn ir_to_abstract(
                 });
                 first
             }
+            _ => todo!(),
         }
     }
 
@@ -97,25 +100,33 @@ pub fn ir_to_abstract(
                 program.push(Instruction::Return);
                 program
             }
-            Command::Store(var, e) => cogen_exp(Operand::Temp(var), e, tf),
-            Command::StoreImpureBinOp(var, e1, op, e2) => {
+            Command::Store(var, e) => {
+                cogen_exp(Operand::Temp(var.into()), e, tf)
+            }
+            Command::StoreImpureBinOp {
+                dest,
+                left,
+                op,
+                right,
+            } => {
                 let t1 = Operand::Temp(tf.make_temp());
                 let t2 = Operand::Temp(tf.make_temp());
-                let mut first = cogen_exp(t1.clone(), e1, tf);
-                let mut second = cogen_exp(t2.clone(), e2, tf);
+                let mut first = cogen_exp(t1.clone(), left, tf);
+                let mut second = cogen_exp(t2.clone(), right, tf);
                 first.append(&mut second);
                 first.push(Instruction::Binop {
-                    d: Operand::Temp(var),
+                    d: Operand::Temp(dest.into()),
                     s1: t1,
                     op: crate::frontend::ast::BinOp::from(op),
                     s2: t2,
                 });
                 first
             }
+            _ => todo!(),
         }
     }
 
-    ir.0.into_iter()
+    ir.into_iter()
         .flat_map(|command| cogen_command(command, tf))
         .collect()
 }
@@ -198,6 +209,7 @@ mod abs_asm_tests {
                     crate::frontend::ast::BinOp::Modulo => {
                         stored_s1 % stored_s2
                     }
+                    _ => todo!(),
                 };
 
                 state.insert(d.clone(), result);
@@ -247,10 +259,10 @@ mod abs_asm_tests {
         // r_ret <- t4      = 1
         // return
 
-        let t1 = Operand::Temp(String::from("t1"));
-        let t2 = Operand::Temp(String::from("t2"));
-        let t3 = Operand::Temp(String::from("t3"));
-        let t4 = Operand::Temp(String::from("t4"));
+        let t1 = Operand::Temp(String::from("t1").into());
+        let t2 = Operand::Temp(String::from("t2").into());
+        let t3 = Operand::Temp(String::from("t3").into());
+        let t4 = Operand::Temp(String::from("t4").into());
         let program = vec![
             Instruction::Binop {
                 d: t1.clone(),
