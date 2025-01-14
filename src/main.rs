@@ -21,7 +21,7 @@ int main() {
         else
             return -2;
 
-    return 0;
+    return x;
 }
 ";
     println!("program to compile: \n[{program}]");
@@ -33,7 +33,7 @@ int main() {
     let elab_program = frontend::elaboration::elaborate(program);
     println!("program elaborated to:\n{elab_program}");
     if !static_analysis::check(&elab_program) {
-        println!("program failed to typecheck!");
+        println!("program failed static analysis!");
         return;
     }
     println!("program passed static analysis!");

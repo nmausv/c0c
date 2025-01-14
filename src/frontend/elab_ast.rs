@@ -60,7 +60,7 @@ impl std::fmt::Display for Stmt {
                 )
             }
             Self::Assign(var, exp) => write!(f, "{var} = {exp};"),
-            Self::Nop => write!(f, "Nop;"),
+            Self::Nop => write!(f, "nop;"),
             Self::Return(exp) => write!(f, "return {exp};"),
             Self::Seq(v) => {
                 write!(f, "{{")?;
