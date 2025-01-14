@@ -13,27 +13,26 @@ fn elaborate_binop(
     let elab_left = Box::new(elaborate_exp(eleft));
     let elab_right = Box::new(elaborate_exp(eright));
 
-    match elab_ast::BinOp::from(*binop) {
-        elab_ast::BinOp::Pure(elab_ast::PureBinOp::LogAnd) => {
-            elab_ast::Exp::Ternary {
-                cond: elab_left,
-                branch_true: elab_right,
-                branch_false: Box::new(elab_ast::Exp::False),
+    match binop {
+        ast::BinOp::LogAnd => elab_ast::Exp::Ternary {
+            cond: elab_left,
+            exp_true: elab_right,
+            exp_false: Box::new(elab_ast::Exp::False),
+        },
+        ast::BinOp::LogOr => elab_ast::Exp::Ternary {
+            cond: elab_left,
+            exp_true: Box::new(elab_ast::Exp::True),
+            exp_false: elab_right,
+        },
+        ast_binop => match elab_ast::BinOp::try_from(*ast_binop) {
+            Ok(elab_ast::BinOp::Pure(op)) => {
+                elab_ast::Exp::PureBinop(elab_left, op, elab_right)
             }
-        }
-        elab_ast::BinOp::Pure(elab_ast::PureBinOp::LogOr) => {
-            elab_ast::Exp::Ternary {
-                cond: elab_left,
-                branch_true: Box::new(elab_ast::Exp::True),
-                branch_false: elab_right,
+            Ok(elab_ast::BinOp::Impure(op)) => {
+                elab_ast::Exp::ImpureBinop(elab_left, op, elab_right)
             }
-        }
-        elab_ast::BinOp::Pure(op) => {
-            elab_ast::Exp::PureBinop(elab_left, op, elab_right)
-        }
-        elab_ast::BinOp::Impure(op) => {
-            elab_ast::Exp::ImpureBinop(elab_left, op, elab_right)
-        }
+            _ => panic!("attempted conversion of && or || into single elaborated binop"),
+        },
     }
 }
 
@@ -53,8 +52,8 @@ fn elaborate_exp(exp: &ast::Exp) -> elab_ast::Exp {
             branch_false,
         } => elab_ast::Exp::Ternary {
             cond: Box::new(elaborate_exp(cond)),
-            branch_true: Box::new(elaborate_exp(branch_true)),
-            branch_false: Box::new(elaborate_exp(branch_false)),
+            exp_true: Box::new(elaborate_exp(branch_true)),
+            exp_false: Box::new(elaborate_exp(branch_false)),
         },
     }
 }
@@ -236,8 +235,8 @@ fn elaborate_stmt(stmt: &ast::Stmt) -> elab_ast::Stmt {
             };
             elab_ast::Stmt::If {
                 cond: elaborate_exp(cond),
-                branch_true: Box::new(elaborate_stmt(&branch_true)),
-                branch_false: Box::new(elab_false),
+                stmt_true: Box::new(elaborate_stmt(&branch_true)),
+                stmt_false: Box::new(elab_false),
             }
         }
         ast::Stmt::Exp(exp) => elab_ast::Stmt::Exp(elaborate_exp(exp)),

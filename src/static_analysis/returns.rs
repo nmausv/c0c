@@ -9,12 +9,12 @@ fn return_check_statement(s: &Stmt) -> bool {
         Stmt::Exp(_) => false,
         Stmt::While { .. } => false,
         Stmt::If {
-            branch_true,
-            branch_false,
+            stmt_true,
+            stmt_false,
             ..
         } => {
-            return_check_statement(branch_true)
-                && return_check_statement(branch_false)
+            return_check_statement(stmt_true)
+                && return_check_statement(stmt_false)
         }
         Stmt::Return(_) => true,
     }

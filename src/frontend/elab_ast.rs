@@ -34,8 +34,8 @@ pub enum Stmt {
     Nop,
     If {
         cond: Exp,
-        branch_true: Box<Stmt>,
-        branch_false: Box<Stmt>,
+        stmt_true: Box<Stmt>,
+        stmt_false: Box<Stmt>,
     },
     While {
         cond: Exp,
@@ -70,12 +70,12 @@ impl std::fmt::Display for Stmt {
             }
             Self::If {
                 cond,
-                branch_true,
-                branch_false,
+                stmt_true,
+                stmt_false,
             } => {
                 write!(
                 f,
-                "if ({cond}) {{start if body\n{branch_true}\nend if body}} else {{start else body\n{branch_false}\nend else body}}"
+                "if ({cond}) {{start if body\n{stmt_true}\nend if body}} else {{start else body\n{stmt_false}\nend else body}}"
             )
             }
             Self::While { cond, body } => {
@@ -97,8 +97,8 @@ pub enum Exp {
     False,
     Ternary {
         cond: Box<Exp>,
-        branch_true: Box<Exp>,
-        branch_false: Box<Exp>,
+        exp_true: Box<Exp>,
+        exp_false: Box<Exp>,
     },
 }
 
@@ -114,9 +114,9 @@ impl std::fmt::Display for Exp {
             Self::False => write!(f, "false"),
             Self::Ternary {
                 cond,
-                branch_true,
-                branch_false,
-            } => write!(f, "{cond} ? {branch_true} : {branch_false}"),
+                exp_true,
+                exp_false,
+            } => write!(f, "{cond} ? {exp_true} : {exp_false}"),
         }
     }
 }
@@ -135,6 +135,34 @@ pub enum OpType {
     Arithmetic,
 }
 
+impl TryFrom<ast::BinOp> for BinOp {
+    // only possible error is that `&&` and `||` are elaborated away
+    // and so do not have a corresponding elaborated type
+    type Error = ();
+    fn try_from(value: ast::BinOp) -> Result<Self, Self::Error> {
+        match value {
+            ast::BinOp::Plus => Ok(Self::Pure(PureBinOp::Plus)),
+            ast::BinOp::Minus => Ok(Self::Pure(PureBinOp::Minus)),
+            ast::BinOp::Times => Ok(Self::Pure(PureBinOp::Times)),
+            ast::BinOp::Divide => Ok(Self::Impure(ImpureBinOp::Divide)),
+            ast::BinOp::Modulo => Ok(Self::Impure(ImpureBinOp::Modulo)),
+            ast::BinOp::Less => Ok(Self::Pure(PureBinOp::Less)),
+            ast::BinOp::LessEq => Ok(Self::Pure(PureBinOp::LessEq)),
+            ast::BinOp::Greater => Ok(Self::Pure(PureBinOp::Greater)),
+            ast::BinOp::GreaterEq => Ok(Self::Pure(PureBinOp::GreaterEq)),
+            ast::BinOp::Eq => Ok(Self::Pure(PureBinOp::Eq)),
+            ast::BinOp::NotEq => Ok(Self::Pure(PureBinOp::NotEq)),
+            ast::BinOp::LogAnd => Err(()),
+            ast::BinOp::LogOr => Err(()),
+            ast::BinOp::BitAnd => Ok(Self::Pure(PureBinOp::BitAnd)),
+            ast::BinOp::BitXor => Ok(Self::Pure(PureBinOp::BitXor)),
+            ast::BinOp::BitOr => Ok(Self::Pure(PureBinOp::BitOr)),
+            ast::BinOp::Shl => Ok(Self::Impure(ImpureBinOp::Shl)),
+            ast::BinOp::Shr => Ok(Self::Impure(ImpureBinOp::Shr)),
+        }
+    }
+}
+
 impl BinOp {
     pub fn signature(self) -> OpType {
         match self {
@@ -149,8 +177,6 @@ impl BinOp {
             Self::Pure(PureBinOp::GreaterEq) => OpType::Relational,
             Self::Pure(PureBinOp::Eq) => OpType::Equality,
             Self::Pure(PureBinOp::NotEq) => OpType::Equality,
-            Self::Pure(PureBinOp::LogAnd) => OpType::Logical,
-            Self::Pure(PureBinOp::LogOr) => OpType::Logical,
             Self::Pure(PureBinOp::BitAnd) => OpType::Arithmetic,
             Self::Pure(PureBinOp::BitXor) => OpType::Arithmetic,
             Self::Pure(PureBinOp::BitOr) => OpType::Arithmetic,
@@ -163,31 +189,6 @@ impl BinOp {
 impl From<ImpureBinOp> for BinOp {
     fn from(value: ImpureBinOp) -> Self {
         Self::Impure(value)
-    }
-}
-
-impl From<ast::BinOp> for BinOp {
-    fn from(binop: ast::BinOp) -> Self {
-        match binop {
-            ast::BinOp::Plus => Self::Pure(PureBinOp::Plus),
-            ast::BinOp::Minus => Self::Pure(PureBinOp::Minus),
-            ast::BinOp::Times => Self::Pure(PureBinOp::Times),
-            ast::BinOp::Divide => Self::Impure(ImpureBinOp::Divide),
-            ast::BinOp::Modulo => Self::Impure(ImpureBinOp::Modulo),
-            ast::BinOp::Less => Self::Pure(PureBinOp::Less),
-            ast::BinOp::LessEq => Self::Pure(PureBinOp::LessEq),
-            ast::BinOp::Greater => Self::Pure(PureBinOp::Greater),
-            ast::BinOp::GreaterEq => Self::Pure(PureBinOp::GreaterEq),
-            ast::BinOp::Eq => Self::Pure(PureBinOp::Eq),
-            ast::BinOp::NotEq => Self::Pure(PureBinOp::NotEq),
-            ast::BinOp::LogAnd => Self::Pure(PureBinOp::LogAnd),
-            ast::BinOp::LogOr => Self::Pure(PureBinOp::LogOr),
-            ast::BinOp::BitAnd => Self::Pure(PureBinOp::BitAnd),
-            ast::BinOp::BitXor => Self::Pure(PureBinOp::BitXor),
-            ast::BinOp::BitOr => Self::Pure(PureBinOp::BitOr),
-            ast::BinOp::Shl => Self::Impure(ImpureBinOp::Shl),
-            ast::BinOp::Shr => Self::Impure(ImpureBinOp::Shr),
-        }
     }
 }
 
@@ -212,8 +213,6 @@ pub enum PureBinOp {
     GreaterEq,
     Eq,
     NotEq,
-    LogAnd,
-    LogOr,
     BitAnd,
     BitXor,
     BitOr,
@@ -231,8 +230,6 @@ impl From<PureBinOp> for ast::BinOp {
             PureBinOp::GreaterEq => Self::GreaterEq,
             PureBinOp::Eq => Self::Eq,
             PureBinOp::NotEq => Self::NotEq,
-            PureBinOp::LogAnd => Self::LogAnd,
-            PureBinOp::LogOr => Self::LogOr,
             PureBinOp::BitAnd => Self::BitAnd,
             PureBinOp::BitXor => Self::BitXor,
             PureBinOp::BitOr => Self::BitOr,

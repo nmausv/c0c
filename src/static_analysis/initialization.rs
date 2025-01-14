@@ -21,12 +21,12 @@ fn exp_uses_only(exp: &Exp, initialized: &VarSet) -> bool {
         Exp::UnOp(_, e) => exp_uses_only(e, initialized),
         Exp::Ternary {
             cond,
-            branch_true,
-            branch_false,
+            exp_true,
+            exp_false,
         } => {
             exp_uses_only(cond, initialized)
-                && exp_uses_only(branch_true, initialized)
-                && exp_uses_only(branch_false, initialized)
+                && exp_uses_only(exp_true, initialized)
+                && exp_uses_only(exp_false, initialized)
         }
     }
 }
@@ -51,7 +51,8 @@ fn stmt_initializes(mut env: StmtEnv, s: &Stmt) -> Option<StmtEnv> {
             Some(intermediary)
         }
         Stmt::Assign(x, e) => {
-            if env.inscope.contains_key(x) && exp_uses_only(e, &env.initialized) {
+            if env.inscope.contains_key(x) && exp_uses_only(e, &env.initialized)
+            {
                 env.initialized.insert(x.clone());
                 Some(env)
             } else {
@@ -89,8 +90,8 @@ fn stmt_initializes(mut env: StmtEnv, s: &Stmt) -> Option<StmtEnv> {
         Stmt::Exp(_) => Some(env),
         Stmt::If {
             cond,
-            branch_true,
-            branch_false,
+            stmt_true,
+            stmt_false,
         } => {
             if !exp_uses_only(cond, &env.initialized) {
                 return None;
@@ -100,8 +101,8 @@ fn stmt_initializes(mut env: StmtEnv, s: &Stmt) -> Option<StmtEnv> {
             // if we only use one clone, we need to clone the previous inscope anyway
             // because we need to make sure that variables declared in the branches
             // aren't valid in scope outside those branches
-            let env_true = stmt_initializes(env.clone(), branch_true)?;
-            let env_false = stmt_initializes(env.clone(), branch_false)?;
+            let env_true = stmt_initializes(env.clone(), stmt_true)?;
+            let env_false = stmt_initializes(env.clone(), stmt_false)?;
 
             // note:
             // right now this code is obvious in what it does, at the cost of some efficiency.

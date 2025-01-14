@@ -76,17 +76,17 @@ impl Exp {
             }
             Exp::Ternary {
                 cond,
-                branch_true,
-                branch_false,
+                exp_true,
+                exp_false,
             } => {
                 let cond_type = cond.synthesize(types)?;
                 if cond_type != Type::Bool {
                     return None;
                 }
 
-                let branch_type = branch_true.synthesize(types)?;
+                let branch_type = exp_true.synthesize(types)?;
 
-                if branch_false.synthesize(types)? == branch_type {
+                if exp_false.synthesize(types)? == branch_type {
                     Some(branch_type)
                 } else {
                     None
@@ -126,12 +126,12 @@ fn check_stmt(types: &mut TypeMap, s: &Stmt, t: Type) -> bool {
         Stmt::Exp(e) => e.synthesize(types).is_some(),
         Stmt::If {
             cond,
-            branch_true,
-            branch_false,
+            stmt_true,
+            stmt_false,
         } => {
             if cond.synthesize(types) == Some(Type::Bool) {
-                check_stmt(types, branch_true, t)
-                    && check_stmt(types, branch_false, t)
+                check_stmt(types, stmt_true, t)
+                    && check_stmt(types, stmt_false, t)
             } else {
                 false
             }
