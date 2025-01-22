@@ -46,7 +46,7 @@ impl std::fmt::Display for Temp {
 /// for optimization.
 ///
 /// As such, they only wrap `String`,
-/// with From implemented for conversions,
+/// with `From` implemented for conversions,
 /// but they should not be thought of as
 /// modifiable like `String`.
 #[derive(Debug, PartialEq, Eq, Clone)]

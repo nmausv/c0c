@@ -65,7 +65,7 @@ impl std::fmt::Display for Stmt {
             Self::Seq(v) => {
                 write!(f, "{{")?;
                 let _ =
-                    v.iter().map(|s| write!(f, "{s}\n")).collect::<Vec<_>>();
+                    v.iter().map(|s| writeln!(f, "{s}")).collect::<Vec<_>>();
                 write!(f, "}}")
             }
             Self::If {
@@ -133,6 +133,15 @@ pub enum OpType {
     Equality,
     Logical,
     Arithmetic,
+}
+
+impl From<BinOp> for ast::BinOp {
+    fn from(value: BinOp) -> Self {
+        match value {
+            BinOp::Pure(bop) => ast::BinOp::from(bop),
+            BinOp::Impure(bop) => ast::BinOp::from(bop),
+        }
+    }
 }
 
 impl TryFrom<ast::BinOp> for BinOp {

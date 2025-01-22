@@ -31,7 +31,9 @@ fn elaborate_binop(
             Ok(elab_ast::BinOp::Impure(op)) => {
                 elab_ast::Exp::ImpureBinop(elab_left, op, elab_right)
             }
-            _ => panic!("attempted conversion of && or || into single elaborated binop"),
+            _ => panic!(
+                "attempted conversion of && or || into single elaborated binop"
+            ),
         },
     }
 }
@@ -143,7 +145,7 @@ fn elaborate_stmt(stmt: &ast::Stmt) -> elab_ast::Stmt {
         ast::Stmt::Return(exp) => elab_ast::Stmt::Return(elaborate_exp(exp)),
         ast::Stmt::While { cond, body } => elab_ast::Stmt::While {
             cond: elaborate_exp(cond),
-            body: Box::new(elaborate_stmt(&body)),
+            body: Box::new(elaborate_stmt(body)),
         },
         ast::Stmt::For {
             init,
@@ -156,7 +158,7 @@ fn elaborate_stmt(stmt: &ast::Stmt) -> elab_ast::Stmt {
 
             let new_body: elab_ast::Stmt;
 
-            // elaborate the step and put it into the body
+            // elaborate the step and put it after the body
             if let Some(step) = step {
                 new_body = match (&**step, elab_body) {
                     (ast::Stmt::Declare(_, _), _) => {
@@ -166,12 +168,12 @@ fn elaborate_stmt(stmt: &ast::Stmt) -> elab_ast::Stmt {
                         panic!("step cannot be declaration in for loop")
                     }
                     (step, elab_ast::Stmt::Seq(mut v)) => {
-                        v.push_back(elaborate_stmt(&step));
+                        v.push_back(elaborate_stmt(step));
                         elab_ast::Stmt::Seq(v)
                     }
-                    (step, body) => elab_ast::Stmt::Seq(
-                        [elaborate_stmt(&step), body].into(),
-                    ),
+                    (step, body) => {
+                        elab_ast::Stmt::Seq([body, elaborate_stmt(step)].into())
+                    }
                 };
             } else {
                 new_body = elab_body;
@@ -230,12 +232,12 @@ fn elaborate_stmt(stmt: &ast::Stmt) -> elab_ast::Stmt {
             branch_false,
         } => {
             let elab_false = match branch_false {
-                Some(branch_false) => elaborate_stmt(&branch_false),
+                Some(branch_false) => elaborate_stmt(branch_false),
                 None => elab_ast::Stmt::Nop,
             };
             elab_ast::Stmt::If {
                 cond: elaborate_exp(cond),
-                stmt_true: Box::new(elaborate_stmt(&branch_true)),
+                stmt_true: Box::new(elaborate_stmt(branch_true)),
                 stmt_false: Box::new(elab_false),
             }
         }
@@ -265,7 +267,7 @@ fn elaborate_stmts(stmts: &[ast::Stmt]) -> elab_ast::Stmt {
     }
 
     if let ast::Stmt::Block(b) = first {
-        return match (elaborate_stmts(&b), elaborate_stmts(rest)) {
+        return match (elaborate_stmts(b), elaborate_stmts(rest)) {
             (elab_ast::Stmt::Seq(mut seq1), elab_ast::Stmt::Seq(mut seq2)) => {
                 seq1.append(&mut seq2);
                 elab_ast::Stmt::Seq(seq1)

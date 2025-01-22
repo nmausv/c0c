@@ -23,5 +23,5 @@ pub fn check(elab_program: &elab_ast::Program) -> bool {
         return false;
     }
 
-    return true;
+    true
 }

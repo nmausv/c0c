@@ -21,7 +21,10 @@ impl From<Vec<Command>> for Program {
 
 impl std::fmt::Display for Program {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.iter().map(|s| write!(f, "{s}\n")).collect()
+        self.0.iter().try_for_each(|s| match s {
+            Command::Label(_) => write!(f, "{s} "),
+            _ => writeln!(f, "{s}"),
+        })
     }
 }
 

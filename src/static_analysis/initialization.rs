@@ -150,10 +150,7 @@ pub fn initialization_check(elab_program: &Program) -> bool {
         initialized: HashSet::new(),
     };
 
-    match stmt_initializes(env, elab_program.as_ref()) {
-        None => false,
-        Some(_) => true,
-    }
+    stmt_initializes(env, elab_program.as_ref()).is_some()
 }
 
 #[cfg(test)]

@@ -6,11 +6,11 @@ pub struct Program {
 
 impl std::fmt::Display for Program {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} defined as {{\n", self.name)?;
+        writeln!(f, "{} defined as {{", self.name)?;
         let _ = self
             .body
             .iter()
-            .map(|s| write!(f, "{s}\n"))
+            .map(|s| writeln!(f, "{s}"))
             .collect::<Vec<_>>();
         write!(f, "}} end of {}", self.name)
     }
@@ -51,7 +51,7 @@ impl std::fmt::Display for Stmt {
             Self::PostOp(var, op) => write!(f, "{var}{op};"),
             Self::Return(exp) => write!(f, "return {exp};"),
             Self::Exp(exp) => write!(f, "{exp};"),
-            Self::Block(v) => v.iter().map(|s| write!(f, "{s}\n")).collect(),
+            Self::Block(v) => v.iter().try_for_each(|s| writeln!(f, "{s}")),
             Self::If {
                 cond,
                 branch_true,
