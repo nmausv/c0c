@@ -1,6 +1,7 @@
 
 # Global
 - [x] pretty print functionality
+    uses `Display` trait
 
 # Front End
 
@@ -75,6 +76,7 @@
 
 # IR Translation
 - [x] separate between commands (impure) and expressions (pure)
+- [ ] decide whether to split into basic blocks now, or wait for a future iteration (L3?)
 - [>] tests
     - [ ] TODO
 
