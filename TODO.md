@@ -1,4 +1,14 @@
 
+# Current Status
+- [ ] parsing large numbers is problematic, specifically `INT_MIN`, since the parser recognizes the `2147483648` as a token,
+      and not the minus sign, leading to an integer overflow.
+      Moreover, `gcc` actually handles basic arithmetic even if it overflows, such as `2147483648 - 1` without causing an overflow.
+      As far as I can tell, the way they do that is by implicitly considering all integer literals as `int128_t`, and any integer literal
+      outside that range gets truncated.
+      I think that's probably the best approach, but I'll only use `int64_t` for ease of use, since I don't think Rust has builtin
+      128 bit integers.
+      Additionally, during static semantics I'll want to check that all the integer literals fit in 32 bits.
+
 # Global
 - [x] pretty print functionality
     uses `Display` trait

@@ -5,6 +5,7 @@ authors = ["Nick Maus <nmausv@gmail.com>"]
 edition = "2021"
 
 [dependencies]
+clap = { version = "4.5.27", features = ["derive"] }
 lalrpop-util = { version = "0.21.0", features = ["lexer", "unicode"] }
 
 # Add a build-time dependency on the lalrpop library:
