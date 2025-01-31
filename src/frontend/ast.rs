@@ -20,7 +20,7 @@ impl std::fmt::Display for Program {
 pub enum Stmt {
     Declare(Ident, Type),
     DeclareAssign(Ident, Type, Exp),
-    Assign(Ident, AsnOp, Exp),
+    Assign(Lvalue, AsnOp, Exp),
     Block(Vec<Stmt>),
     Return(Exp),
     If {
@@ -38,7 +38,7 @@ pub enum Stmt {
         step: Option<Box<Stmt>>,
         body: Box<Stmt>,
     },
-    PostOp(Ident, PostOp),
+    PostOp(Lvalue, PostOp),
     Exp(Exp),
 }
 
@@ -94,7 +94,7 @@ impl std::fmt::Display for Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Exp {
     Num(Num),
-    Ident(Ident),
+    Lvalue(Lvalue),
     BinOp(Box<Exp>, BinOp, Box<Exp>),
     UnOp(UnOp, Box<Exp>),
     True,
@@ -110,7 +110,7 @@ impl std::fmt::Display for Exp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Num(n) => write!(f, "{n}"),
-            Self::Ident(var) => write!(f, "{var}"),
+            Self::Lvalue(var) => write!(f, "{var}"),
             Self::BinOp(e1, op, e2) => write!(f, "({e1} {op} {e2})"),
             Self::UnOp(op, e) => write!(f, "{op}({e})"),
             Self::True => write!(f, "true"),
@@ -120,6 +120,29 @@ impl std::fmt::Display for Exp {
                 branch_true,
                 branch_false,
             } => write!(f, "{cond} ? {branch_true} : {branch_false}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lvalue {
+    Ident(String),
+}
+
+impl TryFrom<Exp> for Lvalue {
+    type Error = ();
+    fn try_from(value: Exp) -> Result<Self, Self::Error> {
+        match value {
+            Exp::Lvalue(l) => Ok(l),
+            _ => Err(()),
+        }
+    }
+}
+
+impl std::fmt::Display for Lvalue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ident(s) => write!(f, "{s}"),
         }
     }
 }
@@ -254,5 +277,5 @@ impl std::fmt::Display for Type {
 }
 
 // terminals
-pub type Num = i32;
+pub type Num = i128;
 pub type Ident = String;

@@ -96,7 +96,9 @@ fn translate_exp(
         elab_ast::Exp::Num(n) => (vec![], tree::PureExp::Num(n)),
         elab_ast::Exp::True => (vec![], tree::PureExp::Num(1)),
         elab_ast::Exp::False => (vec![], tree::PureExp::Num(0)),
-        elab_ast::Exp::Ident(x) => (vec![], tree::PureExp::Ident(x)),
+        elab_ast::Exp::Lvalue(elab_ast::Lvalue::Ident(x)) => {
+            (vec![], tree::PureExp::Ident(x))
+        }
         // Note that logical operations like (a && b) require possibly short circuit
         // evaluation, so they cannot be translated like arithmetic operations
         // like (a + b), which always require computing both a and b
@@ -219,7 +221,7 @@ fn translate_stmt(
             .into_iter()
             .flat_map(|s| translate_stmt(tf, s))
             .collect(),
-        elab_ast::Stmt::Assign(var, e) => {
+        elab_ast::Stmt::Assign(elab_ast::Lvalue::Ident(var), e) => {
             let (mut edown, eup) = translate_exp(tf, e);
             edown.push(tree::Command::Store(var, eup));
             edown

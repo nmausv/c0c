@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::frontend::elab_ast::{Exp, OpType, Program, Stmt, Type};
+use crate::frontend::elab_ast::{Exp, Lvalue, OpType, Program, Stmt, Type};
 
 type TypeMap = HashMap<String, Type>;
 
@@ -10,7 +10,7 @@ impl Exp {
             Exp::Num(_) => Some(Type::Int),
             Exp::True => Some(Type::Bool),
             Exp::False => Some(Type::Bool),
-            Exp::Ident(x) => types.get(x).copied(),
+            Exp::Lvalue(Lvalue::Ident(x)) => types.get(x).copied(),
             Exp::PureBinop(e1, eq, e2)
                 if eq.signature() == OpType::Equality =>
             {
@@ -102,7 +102,7 @@ impl Exp {
 fn check_stmt(types: &mut TypeMap, s: &Stmt, t: Type) -> bool {
     match s {
         Stmt::Return(e) => e.synthesize(types) == Some(t),
-        Stmt::Assign(var, e) => {
+        Stmt::Assign(Lvalue::Ident(var), e) => {
             let exp_type = e.synthesize(types);
             let var_type = types.get(var);
 

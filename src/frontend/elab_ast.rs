@@ -28,7 +28,7 @@ impl std::fmt::Display for Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Declare(Ident, Type, Box<Stmt>),
-    Assign(Ident, Exp),
+    Assign(Lvalue, Exp),
     Return(Exp),
     Seq(VecDeque<Stmt>),
     Nop,
@@ -56,7 +56,7 @@ impl std::fmt::Display for Stmt {
             Self::Declare(var, t, scope) => {
                 write!(
                     f,
-                    "{{start scope of {t} {var};\n{scope} end scope of {var}}}"
+                    "{{start scope of {t} {var};\n{scope} end scope of {var}}}\n"
                 )
             }
             Self::Assign(var, exp) => write!(f, "{var} = {exp};"),
@@ -88,8 +88,8 @@ impl std::fmt::Display for Stmt {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Exp {
-    Num(i32),
-    Ident(String),
+    Num(Num),
+    Lvalue(Lvalue),
     PureBinop(Box<Exp>, PureBinOp, Box<Exp>),
     ImpureBinop(Box<Exp>, ImpureBinOp, Box<Exp>),
     UnOp(UnOp, Box<Exp>),
@@ -102,11 +102,17 @@ pub enum Exp {
     },
 }
 
+impl From<Lvalue> for Exp {
+    fn from(value: Lvalue) -> Self {
+        Self::Lvalue(value)
+    }
+}
+
 impl std::fmt::Display for Exp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Num(n) => write!(f, "{n}"),
-            Self::Ident(var) => write!(f, "{var}"),
+            Self::Lvalue(l) => write!(f, "{l}"),
             Self::PureBinop(e1, op, e2) => write!(f, "({e1} {op} {e2})"),
             Self::ImpureBinop(e1, op, e2) => write!(f, "({e1} {op} {e2})"),
             Self::UnOp(op, e) => write!(f, "{op}({e})"),
@@ -117,6 +123,35 @@ impl std::fmt::Display for Exp {
                 exp_true,
                 exp_false,
             } => write!(f, "{cond} ? {exp_true} : {exp_false}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Lvalue {
+    Ident(Ident),
+}
+
+impl From<Ident> for Lvalue {
+    fn from(value: Ident) -> Self {
+        Self::Ident(value)
+    }
+}
+
+impl TryFrom<ast::Exp> for Lvalue {
+    type Error = ();
+    fn try_from(value: ast::Exp) -> Result<Self, Self::Error> {
+        match value {
+            ast::Exp::Lvalue(ast::Lvalue::Ident(s)) => Ok(Self::Ident(s)),
+            _ => Err(()),
+        }
+    }
+}
+
+impl std::fmt::Display for Lvalue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ident(s) => write!(f, "{s}"),
         }
     }
 }
@@ -310,4 +345,5 @@ impl std::fmt::Display for ImpureBinOp {
 }
 
 pub type Ident = super::ast::Ident;
+pub type Num = i32;
 pub type Type = super::ast::Type;

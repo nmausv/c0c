@@ -1,8 +1,8 @@
 pub mod ast;
 
 // hand rolled lexer/regex
-// pub mod lexer;
-// mod regex;
+mod regex;
+pub mod lexer;
 
 // LALRPOP
 extern crate lalrpop_util;
@@ -101,7 +101,7 @@ mod elaborate_tests {
         assert!(ast.is_ok());
         let elab_ast = elaborate(ast.unwrap());
         dbg!(&elab_ast);
-        assert!(elab_ast == elab_ast::Stmt::Nop);
+        assert!(elab_ast == elab_ast::Stmt::Nop.into());
     }
 
     #[test]
@@ -113,8 +113,6 @@ mod elaborate_tests {
         assert!(ast.is_ok());
         let elab_ast = elaborate(ast.unwrap());
         dbg!(&elab_ast);
-        //TODO
-        assert!(true);
     }
 
     #[test]
@@ -133,6 +131,7 @@ mod elaborate_tests {
                     elab_ast::Type::Int,
                     Box::new(elab_ast::Stmt::Nop)
                 )
+                .into()
         );
     }
 
