@@ -1,7 +1,8 @@
+
 pub enum Target {
     AbstractAssembly,
-    Arm,
-    Llvm,
+    ARM,
+    LLVM,
 }
 
 mod abstract_assembly;
@@ -24,7 +25,7 @@ pub fn codegen(
                 })
                 .collect()
         }
-        Target::Arm => todo!(),
-        Target::Llvm => todo!(),
+        Target::ARM => todo!(),
+        Target::LLVM => todo!(),
     }
 }

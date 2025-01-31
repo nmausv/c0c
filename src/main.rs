@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, non_camel_case_types, clippy::upper_case_acronyms)]
 
 mod codegen;
 mod frontend;
@@ -7,43 +7,202 @@ mod static_analysis;
 mod temps;
 mod translation;
 
-fn main() {
-    let program = "
-int main() {
-    int x = 0;
-    for (int i = 0; i < 10; i++)
-        x += i;
+use std::fs::read_to_string;
 
-    // test dangling else
-    if (x >= 45 && x * x != 2025)
-        if (x == 46)
-            return -1;
-        else
-            return -2;
+use clap::{Parser, ValueEnum};
 
-    return x < 45 ? ~0 : ~~0;
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum Target {
+    asm,
+    x86_64,
+    ARM,
+    LLVM,
 }
-";
-    println!("program to compile: \n[{program}]");
+
+impl From<Target> for codegen::Target {
+    fn from(value: Target) -> Self {
+        match value {
+            Target::asm => codegen::Target::AbstractAssembly,
+            Target::x86_64 => todo!("x86-64 not implemented yet"),
+            Target::ARM => codegen::Target::ARM,
+            Target::LLVM => codegen::Target::LLVM,
+        }
+    }
+}
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Input file to compile
+    #[arg(short, long)]
+    input: String,
+
+    /// File to save emitted code to
+    #[arg(short, long)]
+    output: Option<String>,
+
+    /// Target to emit
+    #[arg(short, long)]
+    target: Target,
+
+    // Verbose mode
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+fn compile(
+    program: String,
+    verbose: bool,
+    target: codegen::Target,
+) -> Result<String, ()> {
+    if verbose {
+        println!("program to compile: \n[{program}]");
+    }
 
     let parser = frontend::c0parser::ProgramParser::new();
-    let program = parser.parse(program).unwrap();
-    println!("program parsed as:\n{program}\n");
-    let elab_program = frontend::elaboration::elaborate(program);
-    println!("program elaborated to:\n{elab_program}\n");
-    if !static_analysis::check(&elab_program) {
-        println!("program failed static analysis! aborting...\n");
-        return;
+    let program = match parser.parse(&program) {
+        Ok(p) => p,
+        Err(e) => {
+            eprint!("failed parsing...");
+            dbg!(e);
+            return Err(());
+        }
+    };
+    if verbose {
+        println!("program parsed as:\n{program}\n");
     }
-    println!("program passed static analysis!\n");
+    let elab_program = frontend::elaboration::elaborate(program);
+    if verbose {
+        println!("program elaborated to:\n{elab_program}\n");
+    }
+    if !static_analysis::check(&elab_program) {
+        return Err(());
+    }
+    if verbose {
+        println!("program passed static analysis!\n");
+    }
 
     let mut tf = temps::TempFactory::new();
     let ir_tree = translation::translate(elab_program, &mut tf);
-    println!("program translated to:\n{ir_tree}\n");
+    if verbose {
+        println!("program translated to:\n{ir_tree}\n");
+    }
 
-    let abstract_assembly =
-        codegen::codegen(ir_tree, codegen::Target::AbstractAssembly, &mut tf);
-    println!("abstract assembly:\n{abstract_assembly}\n");
+    let abstract_assembly = codegen::codegen(ir_tree, target, &mut tf);
+    if verbose {
+        println!("abstract assembly:\n{abstract_assembly}\n");
+    }
+
+    Ok(abstract_assembly)
+}
+
+fn main() {
+    // handle command line arguments
+    let cli = Args::parse();
+
+    println!("cli input: {:?}", cli.input);
+    println!("cli output: {:?}", cli.output);
+    println!("cli target: {:?}", cli.target);
+
+    let program = match read_to_string(&cli.input) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Could not open file \"{}\": {}", &cli.input, e);
+            return;
+        }
+    };
+
+    if compile(program, cli.verbose, cli.target.into()).is_err() {
+        println!("could not compile");
+    }
 
     println!("done!");
+}
+
+#[cfg(test)]
+mod tests {
+    mod l1 {
+        use std::fs::{read_dir, read_to_string};
+
+        use crate::compile;
+
+        enum TestResult {
+            Return(i64), // compile and return value
+            DivZero,     // compile but raise divzero
+            Error,       // fail to compile
+        }
+
+        fn get_test_result(contents: &str) -> Option<TestResult> {
+            // only needs first line
+            let line = contents.lines().next()?.trim();
+
+            if line.starts_with("//test return ") {
+                Some(TestResult::Return(
+                    line.strip_prefix("//test return ")?
+                        .parse::<i64>()
+                        .unwrap(),
+                ))
+            } else if line.starts_with("//test div-by-zero") {
+                Some(TestResult::DivZero)
+            } else if line.starts_with("//test error") {
+                Some(TestResult::Error)
+            } else {
+                None
+            }
+        }
+
+        fn test_directory(path: &str) {
+            let files = read_dir(path).expect("testing directory should exist");
+            for entry in files {
+                let entry = entry.expect("test file should exist");
+
+                eprint!("testing {}...", entry.path().to_str().unwrap());
+
+                let file = read_to_string(entry.path())
+                    .expect("test file should be readable");
+
+                let expected = get_test_result(&file)
+                    .expect("test file should have valid expected result");
+
+                // compile each file without verbose mode
+                let output = compile(
+                    file.clone(),
+                    false,
+                    crate::codegen::Target::AbstractAssembly,
+                );
+
+                if !match expected {
+                    TestResult::Return(_) => output.is_ok(),
+                    TestResult::Error => output.is_err(),
+                    TestResult::DivZero => output.is_ok(),
+                } {
+                    let output = compile(
+                        file.clone(),
+                        true,
+                        crate::codegen::Target::AbstractAssembly,
+                    )
+                    .unwrap();
+                    dbg!(output);
+                    panic!()
+                }
+
+                eprintln!("passed");
+
+                // save to output file
+                // run output file
+                // test against expected output
+                // delete output file
+            }
+        }
+
+        #[test]
+        fn basic() {
+            test_directory("tests/l1-basic");
+        }
+
+        #[test]
+        fn large() {
+            test_directory("tests/l1-large");
+        }
+    }
 }
