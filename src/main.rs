@@ -59,23 +59,23 @@ fn compile(
         println!("program to compile: \n[{program}]");
     }
 
+    let lexer = frontend::lexer::Lexer::new_c0c_lexer(&program);
     let parser = frontend::c0parser::ProgramParser::new();
-    let program = match parser.parse(&program) {
+    let ast = match parser.parse(&program, lexer) {
         Ok(p) => p,
-        Err(e) => {
+        Err(_) => {
             eprint!("failed parsing...");
-            dbg!(e);
             return Err(());
         }
     };
     if verbose {
-        println!("program parsed as:\n{program}\n");
+        println!("program parsed as:\n{ast}\n");
     }
-    let elab_program = frontend::elaboration::elaborate(program);
+    let elab_ast = frontend::elaboration::elaborate(ast);
     if verbose {
-        println!("program elaborated to:\n{elab_program}\n");
+        println!("program elaborated to:\n{elab_ast}\n");
     }
-    if !static_analysis::check(&elab_program) {
+    if !static_analysis::check(&elab_ast) {
         return Err(());
     }
     if verbose {
@@ -83,7 +83,7 @@ fn compile(
     }
 
     let mut tf = temps::TempFactory::new();
-    let ir_tree = translation::translate(elab_program, &mut tf);
+    let ir_tree = translation::translate(elab_ast, &mut tf);
     if verbose {
         println!("program translated to:\n{ir_tree}\n");
     }

@@ -1,5 +1,3 @@
-use crate::frontend::ast::Ident;
-
 /// `Temp`s are meant to be created once,
 /// and possibly copied many times,
 /// but specifically they
@@ -17,15 +15,15 @@ use crate::frontend::ast::Ident;
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct Temp(String);
 
-impl From<Temp> for Ident {
-    fn from(value: Temp) -> Self {
-        value.0
-    }
-}
-
 impl From<String> for Temp {
     fn from(value: String) -> Self {
         Self(value)
+    }
+}
+
+impl From<Temp> for String {
+    fn from(value: Temp) -> Self {
+        value.0
     }
 }
 
@@ -36,7 +34,7 @@ impl std::fmt::Display for Temp {
 }
 
 /// `Label`s are meant to be created once,
-/// and copied many times,
+/// and possibly copied many times,
 /// but specifically they
 /// should not be modified.
 ///
@@ -46,7 +44,7 @@ impl std::fmt::Display for Temp {
 /// for optimization.
 ///
 /// As such, they only wrap `String`,
-/// with `From` implemented for conversions,
+/// with From implemented for conversions,
 /// but they should not be thought of as
 /// modifiable like `String`.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -59,11 +57,11 @@ impl std::fmt::Display for Label {
 }
 
 pub struct TempFactory {
-    temps_used: u32,
-    labels_used: u32,
+    temps_used: usize,
+    labels_used: usize,
 }
 
-impl TempFactory {
+impl<'input> TempFactory {
     pub fn new() -> Self {
         TempFactory {
             temps_used: 0,

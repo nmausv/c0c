@@ -1,29 +1,25 @@
 // Main
 use super::ast::*;
+use crate::frontend::lexer::{LexerError, Token, TokenType, Location};
 
-grammar;
+use lalrpop_util::ParseError;
 
-match {
-  _,
-  r"\s*" => { }, // The default whitespace skipping is disabled if an `ignore pattern` is specified
-  r"//[^\n\r]*[\n\r]*" => { }, // Skip `// comments`
-  r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/" => { },  // Skip `/* comments */`
-}
+grammar<'input>(text: &'input str);
 
-pub Program: Program = {
+pub Program: Program<'input> = {
   "int" <i:Ident> "(" ")" <b:Block> => Program {name: i, body: b},
 };
 
-Block: Vec<Stmt> = {
+Block: Vec<Stmt<'input>> = {
   "{" <Stmt*> "}" => <>,
 };
 
-Stmt: Stmt = {
+Stmt: Stmt<'input> = {
   <OpenStmt> => <>,
   <ClosedStmt> => <>,
 };
 
-ClosedStmt: Stmt = {
+ClosedStmt: Stmt<'input> = {
   <Simp> ";" => <>,
   "return" <Exp> ";" => Stmt::Return(<>),
   <Block> => Stmt::Block(<>),
@@ -35,7 +31,7 @@ ClosedStmt: Stmt = {
   "for" "(" <init:Simp> ";" <cond:Exp> ";" <step:Simp> ")" <body:ClosedStmt> => Stmt::For{init: Some(Box::new(init)), cond, step: Some(Box::new(step)), body: Box::new(body)},
 };
 
-OpenStmt: Stmt = {
+OpenStmt: Stmt<'input> = {
   "if" "(" <cond:Exp> ")" <st:ClosedStmt> "else" <sf:OpenStmt> => Stmt::If{cond, branch_true: Box::new(st), branch_false: Some(Box::new(sf))},
   "if" "(" <cond:Exp> ")" <st:Stmt> => Stmt::If{cond, branch_true: Box::new(st), branch_false: None},
   "while" "(" <cond:Exp> ")" <body:OpenStmt> => Stmt::While{cond, body: Box::new(body)},
@@ -45,86 +41,89 @@ OpenStmt: Stmt = {
   "for" "(" <init:Simp> ";" <cond:Exp> ";" <step:Simp> ")" <body:OpenStmt> => Stmt::For{init: Some(Box::new(init)), cond, step: Some(Box::new(step)), body: Box::new(body)},
 }
 
-Decl: Stmt = {
+Decl: Stmt<'input> = {
   <t:Type> <i:Ident> => Stmt::Declare(i, t),
   <t:Type> <i:Ident> "=" <e:Exp> => Stmt::DeclareAssign(i, t, e),
 };
 
-Simp: Stmt = {
+Simp: Stmt<'input> = {
 #[precedence(level="0")]
   <Decl> => <>,
   <Exp> => Stmt::Exp(<>),
 
 #[precedence(level="1")] #[assoc(side="right")]
-  <v:lvalue> <op:PostOp> => Stmt::PostOp(v, op),
+  <v:Exp> <op:PostOp> =>?
+    // convert generic expression to lvalue, can fail
+    v.try_into().map_err(|_| ParseError::User {
+      error: LexerError::CustomError {msg: "cannot use a postfix operator on a non-lvalue"}
+    }).map(|lval| Stmt::PostOp(lval, op)),
 
 #[precedence(level="2")] #[assoc(side="right")]
-  <v:lvalue> <op:AsnOp> <e:Exp> => Stmt::Assign(v, op, e),
+  <v:Exp> <op:AsnOp> <e:Exp> =>?
+    // convert generic expression to lvalue, can fail
+    v.try_into().map_err(|_| ParseError::User {
+      error: LexerError::CustomError {msg: "cannot use a postfix operator on a non-lvalue"}
+    }).map(|lval| Stmt::Assign(lval, op, e)),
 };
 
-lvalue: Ident = {
-  <Ident> => <>,
-  "(" <lvalue> ")" => <>,
-};
-
-Exp: Exp = {
+Exp: Exp<'input> = {
 #[precedence(level="0")]
-  "(" <Exp> ")" => <>,
-  <Num> => Exp::Num(<>),
-  "true" => Exp::True,
-  "false" => Exp::False,
+  <Term> => <>,
 
-// lvalue conversion has lower precedence than parentheses to prioritize
-// keeping lvalues as lvalues in instances like `((x)) = 2;`
 #[precedence(level="1")] #[assoc(side="right")]
-  <lvalue> => Exp::Ident(<>),
-
-#[precedence(level="2")] #[assoc(side="right")]
   "!" <Exp> => Exp::UnOp(UnOp::LogNegate, Box::new(<>)),
   "~" <Exp> => Exp::UnOp(UnOp::BitNegate, Box::new(<>)),
   "-" <Exp> => Exp::UnOp(UnOp::Negative, Box::new(<>)),
 
-#[precedence(level="3")] #[assoc(side="left")]
+#[precedence(level="2")] #[assoc(side="left")]
   <el:Exp> "*" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Times, Box::new(er)),
   <el:Exp> "/" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Divide, Box::new(er)),
   <el:Exp> "%" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Modulo, Box::new(er)),
 
-#[precedence(level="4")] #[assoc(side="left")]
+#[precedence(level="3")] #[assoc(side="left")]
   <el:Exp> "+" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Plus, Box::new(er)),
   <el:Exp> "-" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Minus, Box::new(er)),
 
-#[precedence(level="5")] #[assoc(side="left")]
+#[precedence(level="4")] #[assoc(side="left")]
   <el:Exp> "<<" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Shl, Box::new(er)),
   <el:Exp> ">>" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Shr, Box::new(er)),
 
-#[precedence(level="6")] #[assoc(side="left")]
+#[precedence(level="5")] #[assoc(side="left")]
   <el:Exp> "<" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Less, Box::new(er)),
   <el:Exp> "<=" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::LessEq, Box::new(er)),
   <el:Exp> ">" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Greater, Box::new(er)),
   <el:Exp> ">=" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::GreaterEq, Box::new(er)),
 
-#[precedence(level="7")] #[assoc(side="left")]
+#[precedence(level="6")] #[assoc(side="left")]
   <el:Exp> "==" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Eq, Box::new(er)),
   <el:Exp> "!=" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::NotEq, Box::new(er)),
 
-#[precedence(level="8")] #[assoc(side="left")]
+#[precedence(level="7")] #[assoc(side="left")]
   <el:Exp> "&" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::BitAnd, Box::new(er)),
 
-#[precedence(level="9")] #[assoc(side="left")]
+#[precedence(level="8")] #[assoc(side="left")]
   <el:Exp> "^" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::BitXor, Box::new(er)),
 
-#[precedence(level="10")] #[assoc(side="left")]
+#[precedence(level="9")] #[assoc(side="left")]
   <el:Exp> "|" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::BitOr, Box::new(er)),
 
-#[precedence(level="11")] #[assoc(side="left")]
+#[precedence(level="10")] #[assoc(side="left")]
   <el:Exp> "&&" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::LogAnd, Box::new(er)),
 
-#[precedence(level="12")] #[assoc(side="left")]
+#[precedence(level="11")] #[assoc(side="left")]
   <el:Exp> "||" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::LogOr, Box::new(er)),
 
-#[precedence(level="13")] #[assoc(side="right")]
+#[precedence(level="12")] #[assoc(side="right")]
   <ec:Exp> "?" <et:Exp> ":" <ef:Exp> => Exp::Ternary{cond: Box::new(ec), branch_true: Box::new(et), branch_false: Box::new(ef)}
 };
+
+Term: Exp<'input> = {
+  <Num> => Exp::Num(<>),
+  "true" => Exp::True,
+  "false" => Exp::False,
+  <Ident> => Exp::Lvalue(Lvalue::Ident(<>)),
+  "(" <Exp> ")" => <>,
+}
 
 AsnOp: AsnOp = {
   "=" => AsnOp::Eq,
@@ -145,30 +144,119 @@ PostOp: PostOp = {
   "--" => PostOp::MinusMinus,
 };
 
-Num: i32 = {
-  <DecNum> => <>,
-  <HexNum> => <>,
+Num: Num = {
+  DecNum => {
+    i128::from_str_radix(<>, 10).expect("integer literal too large")
+  },
+  HexNum => {
+    i128::from_str_radix(<>, 16).expect("hex literal too large")
+  },
 };
-
-// 0 | [1-9][0-9]*
-DecNum: i32 = {
-  <r"(0|[1-9][0-9]*)"> => {
-    #[allow(clippy::from_str_radix_10)]
-    i32::from_str_radix(<>, 10).expect("should be valid decimal number")
-  }
-};
-
-// 0[xX][0-9a-fA-F]+
-HexNum: i32 = {
-  <r"0[xX][0-9a-fA-F]+"> => {
-    i32::from_str_radix(&<>[2..], 16).expect("should be valid hexadecimal number")
-  }
-};
-
-// [A-Za-z_][A-Za-z0-9_]*
-Ident: String = <s:r"[A-Za-z_][A-Za-z0-9_]*"> => String::from(s);
 
 Type: Type = {
   "int" => Type::Int,
   "bool" => Type::Bool,
 };
+
+Reserved: () = {
+  "struct",
+  "typedef",
+  "continue",
+  "break",
+  "assert",
+  "NULL",
+  "alloc",
+  "alloc_array",
+  "void",
+  "char",
+  "string",
+}
+
+extern {
+  type Location = Location;
+  type Error = LexerError;
+
+  enum Token<'input> {
+    // Whitespace and comments handled by lexer
+    // Syntax
+    "," => Token{ token_type: TokenType::COMMA, data: <&'input str> },
+    ";" => Token{ token_type: TokenType::SEMICOLON, data: <&'input str> },
+    ":" => Token{ token_type: TokenType::COLON, data: <&'input str> },
+    "'" => Token{ token_type: TokenType::SINGLEQUOTE, data: <&'input str> },
+    "\"" => Token{ token_type: TokenType::DOUBLEQUOTE, data: <&'input str> },
+    "?" => Token{ token_type: TokenType::QUESTIONMARK, data: <&'input str> },
+    // Delimiters
+    "(" => Token{ token_type: TokenType::LPAREN, data: <&'input str> },
+    ")" => Token{ token_type: TokenType::RPAREN, data: <&'input str> },
+    "[" => Token{ token_type: TokenType::LBRACKET, data: <&'input str> },
+    "]" => Token{ token_type: TokenType::RBRACKET, data: <&'input str> },
+    "{" => Token{ token_type: TokenType::LBRACE, data: <&'input str> },
+    "}" => Token{ token_type: TokenType::RBRACE, data: <&'input str> },
+    // Arithmetic operators
+    "+" => Token{ token_type: TokenType::PLUS, data: <&'input str> },
+    "-" => Token{ token_type: TokenType::MINUS, data: <&'input str> },
+    "*" => Token{ token_type: TokenType::TIMES, data: <&'input str> },
+    "/" => Token{ token_type: TokenType::FSLASH, data: <&'input str> },
+    "%" => Token{ token_type: TokenType::PERCENT, data: <&'input str> },
+    "<<" => Token{ token_type: TokenType::SHL, data: <&'input str> },
+    ">>" => Token{ token_type: TokenType::SHR, data: <&'input str> },
+    "&" => Token{ token_type: TokenType::AMPERSAND, data: <&'input str> },
+    "|" => Token{ token_type: TokenType::PIPE, data: <&'input str> },
+    "^" => Token{ token_type: TokenType::CARAT, data: <&'input str> },
+    // Boolean operators
+    "&&" => Token{ token_type: TokenType::DOUBLEAMPERSAND, data: <&'input str> },
+    "||" => Token{ token_type: TokenType::DOUBLEPIPE, data: <&'input str> },
+    // Assignment Operators
+    "=" => Token{ token_type: TokenType::EQUALS, data: <&'input str> },
+    "+=" => Token{ token_type: TokenType::PLUSEQ, data: <&'input str> },
+    "-=" => Token{ token_type: TokenType::MINUSEQ, data: <&'input str> },
+    "*=" => Token{ token_type: TokenType::TIMESEQ, data: <&'input str> },
+    "/=" => Token{ token_type: TokenType::FSLASHEQ, data: <&'input str> },
+    "%=" => Token{ token_type: TokenType::PERCENTEQ, data: <&'input str> },
+    "<<=" => Token{ token_type: TokenType::SHLEQ, data: <&'input str> },
+    ">>=" => Token{ token_type: TokenType::SHREQ, data: <&'input str> },
+    "&=" => Token{ token_type: TokenType::AMPERSANDEQ, data: <&'input str> },
+    "|=" => Token{ token_type: TokenType::PIPEEQ, data: <&'input str> },
+    "^=" => Token{ token_type: TokenType::CARATEQ, data: <&'input str> },
+    // Comparison Operators
+    "==" => Token{ token_type: TokenType::EQUALSEQUALS, data: <&'input str> },
+    "!=" => Token{ token_type: TokenType::BANGEQUALS, data: <&'input str> },
+    "<" => Token{ token_type: TokenType::LESS, data: <&'input str> },
+    "<=" => Token{ token_type: TokenType::LESSEQ, data: <&'input str> },
+    ">" => Token{ token_type: TokenType::GREATER, data: <&'input str> },
+    ">=" => Token{ token_type: TokenType::GREATEREQ, data: <&'input str> },
+    // Unary operators
+    "!" => Token{ token_type: TokenType::BANG, data: <&'input str> },
+    "~" => Token{ token_type: TokenType::TILDE, data: <&'input str> },
+    // Postfix Operators
+    "++" => Token{ token_type: TokenType::PLUSPLUS, data: <&'input str> },
+    "--" => Token{ token_type: TokenType::MINUSMINUS, data: <&'input str> },
+    // Identifiers
+    Ident => Token{ token_type: TokenType::IDENT, data: <&'input str> },
+    // Literals
+    DecNum => Token{ token_type: TokenType::DECNUM, data: <&'input str> },
+    HexNum => Token{ token_type: TokenType::HEXNUM, data: <&'input str> },
+    // Type keywords
+    "int" => Token{ token_type: TokenType::INT, data: <&'input str> },
+    "bool" => Token{ token_type: TokenType::BOOL, data: <&'input str> },
+    "void" => Token{ token_type: TokenType::VOID, data: <&'input str> },
+    "char" => Token{ token_type: TokenType::CHAR, data: <&'input str> },
+    "string" => Token{ token_type: TokenType::STRING, data: <&'input str> },
+    // Keywords
+    "struct" => Token{ token_type: TokenType::STRUCT, data: <&'input str> },
+    "typedef" => Token{ token_type: TokenType::TYPEDEF, data: <&'input str> },
+    "if" => Token{ token_type: TokenType::IF, data: <&'input str> },
+    "else" => Token{ token_type: TokenType::ELSE, data: <&'input str> },
+    "while" => Token{ token_type: TokenType::WHILE, data: <&'input str> },
+    "for" => Token{ token_type: TokenType::FOR, data: <&'input str> },
+    "continue" => Token{ token_type: TokenType::CONTINUE, data: <&'input str> },
+    "break" => Token{ token_type: TokenType::BREAK, data: <&'input str> },
+    "return" => Token{ token_type: TokenType::RETURN, data: <&'input str> },
+    "assert" => Token{ token_type: TokenType::ASSERT, data: <&'input str> },
+    "true" => Token{ token_type: TokenType::TRUE, data: <&'input str> },
+    "false" => Token{ token_type: TokenType::FALSE, data: <&'input str> },
+    "NULL" => Token{ token_type: TokenType::NULL, data: <&'input str> },
+    "alloc" => Token{ token_type: TokenType::ALLOC, data: <&'input str> },
+    "alloc_array" => Token{ token_type: TokenType::ALLOCARRAY, data: <&'input str> },
+  }
+}

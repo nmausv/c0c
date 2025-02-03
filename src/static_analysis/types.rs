@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use crate::frontend::elab_ast::{Exp, Lvalue, OpType, Program, Stmt, Type};
 
-type TypeMap = HashMap<String, Type>;
+type TypeMap<'input> = HashMap<&'input str, Type>;
 
-impl Exp {
+impl Exp<'_> {
     fn synthesize(&self, types: &TypeMap) -> Option<Type> {
         match self {
             Exp::Num(_) => Some(Type::Int),
@@ -99,7 +99,7 @@ impl Exp {
     }
 }
 
-fn check_stmt(types: &mut TypeMap, s: &Stmt, t: Type) -> bool {
+fn check_stmt<'input>(types: &mut TypeMap<'input>, s: &'input Stmt, t: Type) -> bool {
     match s {
         Stmt::Return(e) => e.synthesize(types) == Some(t),
         Stmt::Assign(Lvalue::Ident(var), e) => {
@@ -118,7 +118,7 @@ fn check_stmt(types: &mut TypeMap, s: &Stmt, t: Type) -> bool {
             if types.contains_key(var) {
                 return false;
             }
-            types.insert(var.clone(), *var_type);
+            types.insert(var, *var_type);
             let result = check_stmt(types, scope, t);
             types.remove(var);
             result

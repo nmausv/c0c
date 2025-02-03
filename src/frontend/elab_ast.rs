@@ -5,52 +5,52 @@ use std::collections::VecDeque;
 use super::ast;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Program(Stmt);
+pub struct Program<'input>(Stmt<'input>);
 
-impl From<Stmt> for Program {
-    fn from(value: Stmt) -> Self {
+impl<'input> From<Stmt<'input>> for Program<'input> {
+    fn from(value: Stmt<'input>) -> Self {
         Self(value)
     }
 }
 
-impl AsRef<Stmt> for Program {
-    fn as_ref(&self) -> &Stmt {
+impl<'input> AsRef<Stmt<'input>> for Program<'input> {
+    fn as_ref(&self) -> &Stmt<'input> {
         &self.0
     }
 }
 
-impl std::fmt::Display for Program {
+impl<'input> std::fmt::Display for Program<'input> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Stmt {
-    Declare(Ident, Type, Box<Stmt>),
-    Assign(Lvalue, Exp),
-    Return(Exp),
-    Seq(VecDeque<Stmt>),
+pub enum Stmt<'input> {
+    Declare(Ident<'input>, Type, Box<Stmt<'input>>),
+    Assign(Lvalue<'input>, Exp<'input>),
+    Return(Exp<'input>),
+    Seq(VecDeque<Stmt<'input>>),
     Nop,
     If {
-        cond: Exp,
-        stmt_true: Box<Stmt>,
-        stmt_false: Box<Stmt>,
+        cond: Exp<'input>,
+        stmt_true: Box<Stmt<'input>>,
+        stmt_false: Box<Stmt<'input>>,
     },
     While {
-        cond: Exp,
-        body: Box<Stmt>,
+        cond: Exp<'input>,
+        body: Box<Stmt<'input>>,
     },
-    Exp(Exp),
+    Exp(Exp<'input>),
 }
 
-impl From<Program> for Stmt {
-    fn from(value: Program) -> Self {
+impl<'input> From<Program<'input>> for Stmt<'input> {
+    fn from(value: Program<'input>) -> Self {
         value.0
     }
 }
 
-impl std::fmt::Display for Stmt {
+impl<'input> std::fmt::Display for Stmt<'input> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Declare(var, t, scope) => {
@@ -87,28 +87,28 @@ impl std::fmt::Display for Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Exp {
+pub enum Exp<'input> {
     Num(Num),
-    Lvalue(Lvalue),
-    PureBinop(Box<Exp>, PureBinOp, Box<Exp>),
-    ImpureBinop(Box<Exp>, ImpureBinOp, Box<Exp>),
-    UnOp(UnOp, Box<Exp>),
+    Lvalue(Lvalue<'input>),
+    PureBinop(Box<Exp<'input>>, PureBinOp, Box<Exp<'input>>),
+    ImpureBinop(Box<Exp<'input>>, ImpureBinOp, Box<Exp<'input>>),
+    UnOp(UnOp, Box<Exp<'input>>),
     True,
     False,
     Ternary {
-        cond: Box<Exp>,
-        exp_true: Box<Exp>,
-        exp_false: Box<Exp>,
+        cond: Box<Exp<'input>>,
+        exp_true: Box<Exp<'input>>,
+        exp_false: Box<Exp<'input>>,
     },
 }
 
-impl From<Lvalue> for Exp {
-    fn from(value: Lvalue) -> Self {
+impl<'input> From<Lvalue<'input>> for Exp<'input> {
+    fn from(value: Lvalue<'input>) -> Self {
         Self::Lvalue(value)
     }
 }
 
-impl std::fmt::Display for Exp {
+impl<'input> std::fmt::Display for Exp<'input> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Num(n) => write!(f, "{n}"),
@@ -128,19 +128,19 @@ impl std::fmt::Display for Exp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Lvalue {
-    Ident(Ident),
+pub enum Lvalue<'input> {
+    Ident(&'input str),
 }
 
-impl From<Ident> for Lvalue {
-    fn from(value: Ident) -> Self {
+impl<'input> From<Ident<'input>> for Lvalue<'input> {
+    fn from(value: Ident<'input>) -> Self {
         Self::Ident(value)
     }
 }
 
-impl TryFrom<ast::Exp> for Lvalue {
+impl<'input> TryFrom<ast::Exp<'input>> for Lvalue<'input> {
     type Error = ();
-    fn try_from(value: ast::Exp) -> Result<Self, Self::Error> {
+    fn try_from(value: ast::Exp<'input>) -> Result<Self, Self::Error> {
         match value {
             ast::Exp::Lvalue(ast::Lvalue::Ident(s)) => Ok(Self::Ident(s)),
             _ => Err(()),
@@ -148,7 +148,7 @@ impl TryFrom<ast::Exp> for Lvalue {
     }
 }
 
-impl std::fmt::Display for Lvalue {
+impl<'input> std::fmt::Display for Lvalue<'input> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ident(s) => write!(f, "{s}"),
@@ -344,6 +344,6 @@ impl std::fmt::Display for ImpureBinOp {
     }
 }
 
-pub type Ident = super::ast::Ident;
+pub type Ident<'input> = super::ast::Ident<'input>;
 pub type Num = i32;
 pub type Type = super::ast::Type;

@@ -5,9 +5,9 @@ pub mod tree;
 use crate::frontend::elab_ast::{self, OpType};
 use crate::temps::{Label, TempFactory};
 
-fn translate_bool(
-    tf: &mut TempFactory,
-    boolexp: elab_ast::Exp,
+fn translate_bool<'input>(
+    tf: &'input mut TempFactory,
+    boolexp: elab_ast::Exp<'input>,
     branch_true: Label,
     branch_false: Label,
 ) -> Vec<tree::Command> {
@@ -88,16 +88,16 @@ fn translate_bool(
     }
 }
 
-fn translate_exp(
+fn translate_exp<'input>(
     tf: &mut crate::temps::TempFactory,
-    exp: elab_ast::Exp,
+    exp: elab_ast::Exp<'input>,
 ) -> (Vec<tree::Command>, tree::PureExp) {
     match exp {
         elab_ast::Exp::Num(n) => (vec![], tree::PureExp::Num(n)),
         elab_ast::Exp::True => (vec![], tree::PureExp::Num(1)),
         elab_ast::Exp::False => (vec![], tree::PureExp::Num(0)),
         elab_ast::Exp::Lvalue(elab_ast::Lvalue::Ident(x)) => {
-            (vec![], tree::PureExp::Ident(x))
+            (vec![], tree::PureExp::Ident(x.into()))
         }
         // Note that logical operations like (a && b) require possibly short circuit
         // evaluation, so they cannot be translated like arithmetic operations
@@ -211,9 +211,9 @@ fn translate_exp(
     }
 }
 
-fn translate_stmt(
+fn translate_stmt<'input>(
     tf: &mut crate::temps::TempFactory,
-    s: elab_ast::Stmt,
+    s: elab_ast::Stmt<'input>,
 ) -> Vec<tree::Command> {
     match s {
         elab_ast::Stmt::Nop => vec![],
@@ -223,7 +223,7 @@ fn translate_stmt(
             .collect(),
         elab_ast::Stmt::Assign(elab_ast::Lvalue::Ident(var), e) => {
             let (mut edown, eup) = translate_exp(tf, e);
-            edown.push(tree::Command::Store(var, eup));
+            edown.push(tree::Command::Store(var.into(), eup));
             edown
         }
         elab_ast::Stmt::Return(e) => {
@@ -298,8 +298,8 @@ fn translate_stmt(
     }
 }
 
-pub fn translate(
-    elab: elab_ast::Program,
+pub fn translate<'input>(
+    elab: elab_ast::Program<'input>,
     tf: &mut crate::temps::TempFactory,
 ) -> tree::Program {
     translate_stmt(tf, elab.into()).into()

@@ -1,4 +1,4 @@
-use crate::frontend::elab_ast::{BinOp, Ident, ImpureBinOp, PureBinOp, UnOp};
+use crate::frontend::elab_ast::{BinOp, ImpureBinOp, PureBinOp, UnOp};
 
 use crate::temps::Label;
 
@@ -30,9 +30,9 @@ impl std::fmt::Display for Program {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Command {
-    Store(Ident, PureExp),
+    Store(String, PureExp),
     StoreImpureBinOp {
-        dest: Ident,
+        dest: String,
         left: PureExp,
         op: ImpureBinOp,
         right: PureExp,

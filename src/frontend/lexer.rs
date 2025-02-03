@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::{
     error::Error,
     fmt::{self, Display},
@@ -13,6 +12,7 @@ pub enum LexerError {
     UnopenedEndComment { line: usize, col: usize },
     UnclosedStartComment { line: usize, col: usize },
     InvalidInteger { line: usize, col: usize },
+    CustomError { msg: &'static str },
 }
 
 impl Display for LexerError {
@@ -42,13 +42,14 @@ impl Display for LexerError {
             Self::InvalidInteger { line, col } => {
                 write!(f, "Invalid integer at line {}, col {}.", line, col)
             }
+            Self::CustomError { msg } => write!(f, "{msg}"),
         }
     }
 }
 
 impl Error for LexerError {}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 /// Every possible token that the lexer needs to distinguish between.
 ///
 /// For example, if it does not need to distinguish between `\n` and `\t`,
@@ -56,15 +57,7 @@ impl Error for LexerError {}
 /// only needs a `Whitespace` token, and not separate tokens for `\n` and `\t`.
 ///
 /// You will need to store a RegExp to match each token.
-///
-/// For numbers and identifiers, a string must be attached to distinguish between
-/// different numbers/identifiers.
-/// These strings will *not* be evaluated to make sure they fit within the integer
-/// size limits, and instead this check will be deferred.
-///
-/// This string is only guaranteed to match the supplied RegExp, further checks
-/// (such as bounds checks on integers) must be done downstream.
-pub enum Token {
+pub enum TokenType {
     // Whitespace
     WHITESPACE,
     NEWLINE,
@@ -75,8 +68,10 @@ pub enum Token {
     // Syntax
     COMMA,
     SEMICOLON,
+    COLON,
     SINGLEQUOTE,
     DOUBLEQUOTE,
+    QUESTIONMARK,
     // Delimiters
     LPAREN,
     RPAREN,
@@ -84,23 +79,50 @@ pub enum Token {
     RBRACKET,
     LBRACE,
     RBRACE,
-    // Binary Operators
-    EQUALS,
+    // Arithmetic Operators
     PLUS,
-    PLUSEQ,
-    MINUS, // also a unary operation, kind of annoying
-    MINUSEQ,
+    MINUS,
     TIMES,
-    TIMESEQ,
     FSLASH,
-    FSLASHEQ,
     PERCENT,
+    SHL,
+    SHR,
+    AMPERSAND,
+    PIPE,
+    CARAT,
+    // Boolean Operators
+    DOUBLEAMPERSAND,
+    DOUBLEPIPE,
+    // Assignment Operators
+    EQUALS,
+    PLUSEQ,
+    MINUSEQ,
+    TIMESEQ,
+    FSLASHEQ,
     PERCENTEQ,
+    SHLEQ,
+    SHREQ,
+    AMPERSANDEQ,
+    PIPEEQ,
+    CARATEQ,
+    // Comparison Operators
+    EQUALSEQUALS,
+    BANGEQUALS,
+    LESS,
+    LESSEQ,
+    GREATER,
+    GREATEREQ,
+    // Unary Operators
+    BANG,
+    TILDE,
+    // Postfix Operators
+    PLUSPLUS,
+    MINUSMINUS,
     // Identifiers
-    IDENT(String),
+    IDENT,
     // Constants
-    DECNUM(String),
-    HEXNUM(String),
+    DECNUM,
+    HEXNUM,
     // Type Keywords
     INT,
     BOOL,
@@ -125,19 +147,23 @@ pub enum Token {
     ALLOCARRAY,
 }
 
-/// Type for keeping location information inside a file alongside a token
-#[derive(Debug, Clone)]
-pub struct MarkedToken {
-    line: usize,
-    column: usize,
-    data: Token,
+#[derive(Clone, Debug, PartialEq, Eq)]
+/// Stores a slice of the input string, and the assigned token type.
+///
+/// Note that most token types don't need to store the exact string slice,
+/// since for tokens like `IF`, the string slice can be assumed to be `"if"`.
+///
+/// The reason for this storage is for tokens like `IDENT` and `DECNUM`, which
+/// for which the matched string can have meaningful information.
+pub struct Token<'input> {
+    pub token_type: TokenType,
+    pub data: &'input str,
 }
 
-impl MarkedToken {
-    /// Extract underlying token
-    pub fn unmark(self) -> Token {
-        self.data
-    }
+#[derive(Debug, Copy, Clone, Default)]
+pub struct Location {
+    pub line: usize,
+    pub column: usize,
 }
 
 /// Priorities of Lexical tokens
@@ -165,54 +191,53 @@ pub type Priority = i32;
 /// before passing them to `token_builder`.
 pub struct Lexeme {
     engine: DFA,
-    token_builder: fn(&str) -> Token,
+    token_type: TokenType,
     priority: Priority,
 }
 
 impl Lexeme {
     /// Convenience function to create Lexemes inline
-    fn new(
-        pattern: RegExp,
-        token_builder: fn(&str) -> Token,
-        priority: Priority,
-    ) -> Self {
+    fn new(pattern: RegExp, token_type: TokenType, priority: Priority) -> Self {
         Lexeme {
             engine: DFA::from_regex(&pattern),
-            token_builder,
+            token_type,
             priority,
         }
     }
-
-    //TODO LEARN HOW MACROS WORK TO MAKE THIS WAY WAY EASIER
 
     // Convenience function for simple regular expression
     // lexemes.
     //
     // Will match only and exactly the given word, with
     // default priority of 0.
-    //
-    // Currently non functional since the closures capture
-    // the input token parameter.
-    //fn new_keyword(w: &str, t: Token) -> Self {
-    //    Lexeme {
-    //        pattern: regex::RegExp::from_word(w),
-    //        token_builder: move |_: &str| t,
-    //        priority: 0
-    //    }
-    //}
+    fn from_keyword(w: &str, t: TokenType) -> Self {
+        Lexeme {
+            engine: DFA::from_regex(&RegExp::from_word(w)),
+            token_type: t,
+            priority: 0,
+        }
+    }
 }
 
+#[derive(Debug)]
 /// The main struct for interacting with the lexer
-pub struct Lexer {
-    /// Stores Regular Expressions, a token constructor, and the priority of the
+pub struct Lexer<'input> {
+    /// Input string to lex
+    input: &'input str,
+    /// Bytes consumed from the input
+    consumed: usize,
+    /// Last produced token location, used for line + column information
+    location: Location,
+    /// Whether we're currently in a line commnent (`//`)
+    line_comment: bool,
+    /// Stack to represent the levels of multi line comment starts (`/*`)
+    multi_comment_starts: Vec<Location>,
+    /// Stores Regular Expressions, token types, and the priority of the
     /// regular expression/token.
-    ///
-    /// For tokens with data attached, the attached data will be disregarded in
-    /// favor of the matched string.
     lexemes: Vec<Lexeme>,
 }
 
-impl Lexer {
+impl<'input> Lexer<'input> {
     /// Create a lexer with a given list of lexemes to match.
     ///
     /// Each lexeme needs to have an associated Regular Expression,
@@ -225,8 +250,15 @@ impl Lexer {
     /// instead of
     /// [INT, IDENT("while"), NUM(0), SEMICOLON]
     /// so we need to prioritize keywords or deprioritize identifiers.
-    pub fn new(patterns: Vec<Lexeme>) -> Self {
-        Lexer { lexemes: patterns }
+    pub fn new(patterns: Vec<Lexeme>, input: &'input str) -> Self {
+        Lexer {
+            input,
+            consumed: 0,
+            location: Location { line: 1, column: 1 },
+            line_comment: false,
+            multi_comment_starts: vec![],
+            lexemes: patterns,
+        }
     }
 
     /// Convenience function which adds all of the C0 lexical tokens
@@ -234,247 +266,95 @@ impl Lexer {
     ///
     /// For now, super grimy ugly, future plans to create
     /// a macro that makes this easier and less repetitive.
-    pub fn new_c0c_lexer() -> Self {
+    pub fn new_c0c_lexer(input: &'input str) -> Self {
         let default_priority: Priority = 0;
         let patterns: Vec<Lexeme> = vec![
             // Whitespace
             Lexeme::new(
                 RegExp::from_charlist(" \t\r"),
-                |_: &str| Token::WHITESPACE,
+                TokenType::WHITESPACE,
                 default_priority,
             ),
-            Lexeme::new(
-                RegExp::from_word("\n"),
-                |_: &str| Token::NEWLINE,
-                default_priority,
-            ),
+            Lexeme::from_keyword("\n", TokenType::NEWLINE),
             // Comments
-            Lexeme::new(
-                RegExp::from_word("//"),
-                |_: &str| Token::LINECOMMENT,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("/*"),
-                |_: &str| Token::MULTICOMMENTSTART,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("*/"),
-                |_: &str| Token::MULTICOMMENTEND,
-                default_priority,
-            ),
+            Lexeme::from_keyword("//", TokenType::LINECOMMENT),
+            Lexeme::from_keyword("/*", TokenType::MULTICOMMENTSTART),
+            Lexeme::from_keyword("*/", TokenType::MULTICOMMENTEND),
             // Syntax
-            Lexeme::new(
-                RegExp::from_word(","),
-                |_: &str| Token::COMMA,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word(";"),
-                |_: &str| Token::SEMICOLON,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("'"),
-                |_: &str| Token::SINGLEQUOTE,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("\""),
-                |_: &str| Token::DOUBLEQUOTE,
-                default_priority,
-            ),
+            Lexeme::from_keyword(",", TokenType::COMMA),
+            Lexeme::from_keyword(";", TokenType::SEMICOLON),
+            Lexeme::from_keyword(":", TokenType::COLON),
+            Lexeme::from_keyword("'", TokenType::SINGLEQUOTE),
+            Lexeme::from_keyword("\"", TokenType::DOUBLEQUOTE),
+            Lexeme::from_keyword("?", TokenType::QUESTIONMARK),
             // Delimiters
-            Lexeme::new(
-                RegExp::from_word("("),
-                |_: &str| Token::LPAREN,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word(")"),
-                |_: &str| Token::RPAREN,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("["),
-                |_: &str| Token::LBRACKET,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("]"),
-                |_: &str| Token::RBRACKET,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("{"),
-                |_: &str| Token::LBRACE,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("}"),
-                |_: &str| Token::RBRACE,
-                default_priority,
-            ),
-            // Binary operators
-            Lexeme::new(
-                RegExp::from_word("+"),
-                |_: &str| Token::PLUS,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("-"),
-                |_: &str| Token::MINUS,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("*"),
-                |_: &str| Token::TIMES,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("/"),
-                |_: &str| Token::FSLASH,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("%"),
-                |_: &str| Token::PERCENT,
-                default_priority,
-            ),
+            Lexeme::from_keyword("(", TokenType::LPAREN),
+            Lexeme::from_keyword(")", TokenType::RPAREN),
+            Lexeme::from_keyword("[", TokenType::LBRACKET),
+            Lexeme::from_keyword("]", TokenType::RBRACKET),
+            Lexeme::from_keyword("{", TokenType::LBRACE),
+            Lexeme::from_keyword("}", TokenType::RBRACE),
+            // Arithmetic operators
+            Lexeme::from_keyword("+", TokenType::PLUS),
+            Lexeme::from_keyword("-", TokenType::MINUS),
+            Lexeme::from_keyword("*", TokenType::TIMES),
+            Lexeme::from_keyword("/", TokenType::FSLASH),
+            Lexeme::from_keyword("%", TokenType::PERCENT),
+            Lexeme::from_keyword("<<", TokenType::SHL),
+            Lexeme::from_keyword(">>", TokenType::SHR),
+            Lexeme::from_keyword("&", TokenType::AMPERSAND),
+            Lexeme::from_keyword("|", TokenType::PIPE),
+            Lexeme::from_keyword("^", TokenType::CARAT),
+            // Boolean operators
+            Lexeme::from_keyword("&&", TokenType::DOUBLEAMPERSAND),
+            Lexeme::from_keyword("||", TokenType::DOUBLEPIPE),
             // Assignment operators
-            Lexeme::new(
-                RegExp::from_word("="),
-                |_: &str| Token::EQUALS,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("+="),
-                |_: &str| Token::PLUSEQ,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("-="),
-                |_: &str| Token::MINUSEQ,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("*="),
-                |_: &str| Token::TIMESEQ,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("/="),
-                |_: &str| Token::FSLASHEQ,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("%="),
-                |_: &str| Token::PERCENTEQ,
-                default_priority,
-            ),
+            Lexeme::from_keyword("=", TokenType::EQUALS),
+            Lexeme::from_keyword("+=", TokenType::PLUSEQ),
+            Lexeme::from_keyword("-=", TokenType::MINUSEQ),
+            Lexeme::from_keyword("*=", TokenType::TIMESEQ),
+            Lexeme::from_keyword("/=", TokenType::FSLASHEQ),
+            Lexeme::from_keyword("%=", TokenType::PERCENTEQ),
+            Lexeme::from_keyword("<<=", TokenType::SHLEQ),
+            Lexeme::from_keyword(">>=", TokenType::SHREQ),
+            Lexeme::from_keyword("&=", TokenType::AMPERSANDEQ),
+            Lexeme::from_keyword("|=", TokenType::PIPEEQ),
+            Lexeme::from_keyword("^=", TokenType::CARATEQ),
+            // Comparison Operators
+            Lexeme::from_keyword("==", TokenType::EQUALSEQUALS),
+            Lexeme::from_keyword("!=", TokenType::BANGEQUALS),
+            Lexeme::from_keyword("<", TokenType::LESS),
+            Lexeme::from_keyword("<=", TokenType::LESSEQ),
+            Lexeme::from_keyword(">", TokenType::GREATER),
+            Lexeme::from_keyword(">=", TokenType::GREATEREQ),
+            // Unary Operators
+            Lexeme::from_keyword("!", TokenType::BANG),
+            Lexeme::from_keyword("~", TokenType::TILDE),
+            // Postfix Operators
+            Lexeme::from_keyword("++", TokenType::PLUSPLUS),
+            Lexeme::from_keyword("--", TokenType::MINUSMINUS),
             // Type keywords
-            Lexeme::new(
-                RegExp::from_word("int"),
-                |_: &str| Token::INT,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("bool"),
-                |_: &str| Token::BOOL,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("void"),
-                |_: &str| Token::VOID,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("char"),
-                |_: &str| Token::CHAR,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("string"),
-                |_: &str| Token::STRING,
-                default_priority,
-            ),
+            Lexeme::from_keyword("int", TokenType::INT),
+            Lexeme::from_keyword("bool", TokenType::BOOL),
+            Lexeme::from_keyword("void", TokenType::VOID),
+            Lexeme::from_keyword("char", TokenType::CHAR),
+            Lexeme::from_keyword("string", TokenType::STRING),
             // Keywords
-            Lexeme::new(
-                RegExp::from_word("struct"),
-                |_: &str| Token::STRUCT,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("typedef"),
-                |_: &str| Token::TYPEDEF,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("if"),
-                |_: &str| Token::IF,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("else"),
-                |_: &str| Token::ELSE,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("while"),
-                |_: &str| Token::WHILE,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("for"),
-                |_: &str| Token::FOR,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("continue"),
-                |_: &str| Token::CONTINUE,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("break"),
-                |_: &str| Token::BREAK,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("return"),
-                |_: &str| Token::RETURN,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("assert"),
-                |_: &str| Token::ASSERT,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("true"),
-                |_: &str| Token::TRUE,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("false"),
-                |_: &str| Token::FALSE,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("NULL"),
-                |_: &str| Token::NULL,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("alloc"),
-                |_: &str| Token::ALLOC,
-                default_priority,
-            ),
-            Lexeme::new(
-                RegExp::from_word("alloc_array"),
-                |_: &str| Token::ALLOCARRAY,
-                default_priority,
-            ),
+            Lexeme::from_keyword("struct", TokenType::STRUCT),
+            Lexeme::from_keyword("typedef", TokenType::TYPEDEF),
+            Lexeme::from_keyword("if", TokenType::IF),
+            Lexeme::from_keyword("else", TokenType::ELSE),
+            Lexeme::from_keyword("while", TokenType::WHILE),
+            Lexeme::from_keyword("for", TokenType::FOR),
+            Lexeme::from_keyword("continue", TokenType::CONTINUE),
+            Lexeme::from_keyword("break", TokenType::BREAK),
+            Lexeme::from_keyword("return", TokenType::RETURN),
+            Lexeme::from_keyword("assert", TokenType::ASSERT),
+            Lexeme::from_keyword("true", TokenType::TRUE),
+            Lexeme::from_keyword("false", TokenType::FALSE),
+            Lexeme::from_keyword("NULL", TokenType::NULL),
+            Lexeme::from_keyword("alloc", TokenType::ALLOC),
+            Lexeme::from_keyword("alloc_array", TokenType::ALLOCARRAY),
             // Identifiers
             Lexeme::new(
                 // [A-Za-z_][A-Za-z0-9_]*
@@ -497,7 +377,7 @@ impl Lexer {
                         )),
                     )))),
                 ),
-                |id: &str| Token::IDENT(String::from(id)),
+                TokenType::IDENT,
                 // low priority so keywords are matched first
                 -1,
             ),
@@ -513,7 +393,7 @@ impl Lexer {
                         )))),
                     )),
                 ),
-                |decnum: &str| Token::DECNUM(String::from(decnum)),
+                TokenType::DECNUM,
                 default_priority,
             ),
             // hexadecimal
@@ -534,38 +414,38 @@ impl Lexer {
                         )))),
                     )),
                 ),
-                |hexnum: &str| Token::HEXNUM(String::from(hexnum)),
+                TokenType::HEXNUM,
                 default_priority,
             ),
         ];
 
-        Self::new(patterns)
+        Self::new(patterns, input)
     }
 
     /// Internal function to match a string against the lexemes
     ///
-    /// Returns None if the raw token doesn't match any of the lexemes, or the
+    /// Returns None if the raw string doesn't match any of the lexemes, or Some
     /// token it matched along with the number of consumed characters if the raw
-    /// token matched a lexeme.
+    /// string matched a lexeme.
     ///
     /// Always chooses the longest matching prefix, and in cases of ambiguity
     /// chooses the token with the highest priority.
-    fn match_all(&self, raw_token: &str) -> Option<(Token, usize)> {
-        // stores vector of (match length, token builder, priority)
-        let match_iter: Vec<_> = self
+    fn match_all(&mut self) -> Option<(Token<'input>, Location)> {
+        // stores vector of (match length, token, priority)
+        let match_iter = self
             .lexemes
             .iter()
             // try matching every lexeme
             .map(|lexeme| {
                 (
-                    lexeme.engine.matches_against(raw_token),
-                    lexeme.token_builder,
+                    lexeme.engine.matches_against(&self.input[self.consumed..]),
+                    lexeme.token_type,
                     lexeme.priority,
                 )
             })
             // filter out any non matches
             .filter_map(|(match_len, t, p)| match_len.map(|l| (l, t, p)))
-            .collect();
+            .collect::<Vec<_>>();
 
         // get maximum match length
         let max_len = match match_iter
@@ -604,147 +484,153 @@ impl Lexer {
         }
 
         // take the first (and only) candidate
-        let &(tok_len, token_builder, _) = candidates[0];
+        let &(tok_len, token_type, _) = candidates[0];
 
-        // return the lexeme
-        return Some((token_builder(&raw_token[..tok_len]), tok_len));
+        let token: Token<'input> = Token {
+            token_type,
+            data: &self.input[self.consumed..self.consumed + tok_len],
+        };
+
+        self.consumed += tok_len;
+
+        // update lexer location, while storing token location
+        let token_location = self.location;
+
+        if token.token_type == TokenType::NEWLINE {
+            self.location.line += 1;
+            self.location.column = 1;
+        } else {
+            self.location.column += tok_len;
+        }
+
+        // return the token
+        Some((token, token_location))
     }
 
-    /// Internal function to consume characters from a string until a certain token is reached.
+    /// Internal function to consume characters from a string until a certain token type is reached.
     ///
-    /// **TOKENS WITH ATTACHED STRING DATA MUST HAVE THEIR DATA BE THE EMPTY STRING.**
-    /// **IF A TOKEN BUILDER PANICS ON EMPTY STRINGS, IT CANNOT BE USED AS A FILTER.**
-    ///
-    /// Returns `None` if the raw token doesn't match any of the lexemes, or `Some` of the
+    /// Returns `None` if the raw input doesn't match any of the lexemes, or `Some` of the
     /// token it matched along with the number of consumed characters.
     ///
     /// Always chooses the longest matching prefix, and in cases of ambiguity
     /// chooses the token with the highest priority.
     fn skip_until(
-        &self,
-        raw_token: &str,
-        tokens: &[Token],
-    ) -> Option<(Token, usize)> {
-        let smaller_lexer = Lexer {
+        &mut self,
+        token_types: &[TokenType],
+    ) -> Option<(Token<'input>, Location)> {
+        let mut smaller_lexer = Lexer {
+            input: self.input,
+            consumed: self.consumed,
+            location: self.location,
+            // smaller lexer not responsible for comments
+            line_comment: false,
+            multi_comment_starts: vec![],
             lexemes: self
                 .lexemes
                 .iter()
-                .filter(|&lexeme| tokens.contains(&(lexeme.token_builder)("")))
+                .filter(|&lexeme| token_types.contains(&(lexeme.token_type)))
                 .cloned()
                 .collect(),
         };
 
         // skip characters until the first match
-        let mut consumed = 0;
-        let mut matched = smaller_lexer.match_all(&raw_token[consumed..]);
+        let mut matched = smaller_lexer.match_all();
+        let input_chars: Vec<_> = self.input.chars().collect();
         while matched.is_none() {
-            consumed += 1;
-            matched = smaller_lexer.match_all(&raw_token[consumed..]);
+            // out of characters to consume
+            if smaller_lexer.consumed >= smaller_lexer.input.len() {
+                return None;
+            }
+            // (preemptively) update location after skipping character
+            if input_chars[smaller_lexer.consumed] == '\n' {
+                smaller_lexer.location.line += 1;
+                smaller_lexer.location.column = 1;
+            } else {
+                smaller_lexer.location.column += 1;
+            }
+            // skip a character
+            smaller_lexer.consumed += 1;
+            matched = smaller_lexer.match_all();
         }
 
-        // return that match, and add in the consumed characters
-        matched.map(|(t, l)| (t, consumed + l))
+        self.consumed = smaller_lexer.consumed;
+        self.location = smaller_lexer.location;
+
+        matched
     }
 
-    /// Takes in a string of characters, and returns a string of tokens
-    ///
-    /// Tokens are split on whitespace, and then matched against the `Token` enum
-    /// via Regular Expressions.
     pub fn tokenize(
-        &self,
-        characters: &str,
-    ) -> Result<Vec<MarkedToken>, LexerError> {
-        // stores stream of tokens lexed
-        let mut tokens = Vec::new();
+        self,
+    ) -> Result<Vec<(Location, Token<'input>, Location)>, LexerError> {
+        self.collect()
+    }
+}
 
-        // one indexed because that's how (Neo)Vim counts columns/lines.
-        let mut col_num: usize = 1;
-        let mut line_num: usize = 1;
+pub type Spanned<Tok, Loc, Error> = Result<(Loc, Tok, Loc), Error>;
 
-        let total_len: usize = characters.len();
-        let mut consumed_len: usize = 0;
+impl<'input> Iterator for Lexer<'input> {
+    type Item = Spanned<Token<'input>, Location, LexerError>;
 
-        // marks the current line as being commented
-        let mut line_comment: bool = false;
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.consumed >= self.input.len() {
+                if let Some(location) = self.multi_comment_starts.pop() {
+                    eprintln!("unclosed start comment");
+                    return Some(Err(LexerError::UnclosedStartComment {
+                        line: location.line,
+                        col: location.column,
+                    }));
+                }
+                return None;
+            }
 
-        // stack of starting locations for multiline comments
-        // when a closing comment is found, pop the most recent
-        // start off the stack.
-        // while the stack is not empty, only search for comment start/ends,
-        // and newlines (to keep line counts accurate).
-        let mut multi_comment_starts: Vec<(usize, usize)> = Vec::new();
+            let opt: Option<(Token<'input>, Location)>;
 
-        while consumed_len < total_len {
-            let opt: Option<(Token, usize)>;
-            if line_comment {
-                opt = self
-                    .skip_until(&characters[consumed_len..], &[Token::NEWLINE])
-            } else if multi_comment_starts.len() > 0 {
-                opt = self.skip_until(
-                    &characters[consumed_len..],
-                    &[
-                        Token::NEWLINE,
-                        Token::MULTICOMMENTSTART,
-                        Token::MULTICOMMENTEND,
-                    ],
-                )
+            if self.line_comment {
+                opt = self.skip_until(&[TokenType::NEWLINE]);
+            } else if !self.multi_comment_starts.is_empty() {
+                opt = self.skip_until(&[
+                    TokenType::NEWLINE,
+                    TokenType::MULTICOMMENTSTART,
+                    TokenType::MULTICOMMENTEND,
+                ]);
             } else {
-                opt = self.match_all(&characters[consumed_len..]);
+                opt = self.match_all();
             }
-            match opt {
-                None => {
-                    return Err(LexerError::UnrecognizedCharacter {
-                        line: line_num,
-                        col: col_num,
-                    });
+
+            if opt.is_none() {
+                return Some(Err(LexerError::UnrecognizedCharacter {
+                    line: self.location.line,
+                    col: self.location.column,
+                }));
+            }
+
+            let (token, token_location) = opt.unwrap();
+
+            match token.token_type {
+                TokenType::WHITESPACE => {}
+                TokenType::NEWLINE => {
+                    self.line_comment = false;
                 }
-                Some((Token::WHITESPACE, l)) => {
-                    col_num += l;
-                    consumed_len += l;
+                TokenType::LINECOMMENT => {
+                    self.line_comment = true;
                 }
-                Some((Token::NEWLINE, l)) => {
-                    line_comment = false;
-                    line_num += 1;
-                    col_num = 1;
-                    consumed_len += l;
+                TokenType::MULTICOMMENTSTART => {
+                    self.multi_comment_starts.push(token_location);
                 }
-                Some((Token::LINECOMMENT, l)) => {
-                    line_comment = true;
-                    col_num += l;
-                    consumed_len += l;
-                }
-                Some((Token::MULTICOMMENTSTART, l)) => {
-                    multi_comment_starts.push((line_num, col_num));
-                    col_num += l;
-                    consumed_len += l;
-                }
-                Some((Token::MULTICOMMENTEND, l)) => {
-                    if let None = multi_comment_starts.pop() {
-                        return Err(LexerError::UnopenedEndComment {
-                            line: line_num,
-                            col: col_num,
-                        });
+                TokenType::MULTICOMMENTEND => {
+                    if self.multi_comment_starts.pop().is_none() {
+                        return Some(Err(LexerError::UnopenedEndComment {
+                            line: token_location.line,
+                            col: token_location.column,
+                        }));
                     }
-                    col_num += l;
-                    consumed_len += l;
                 }
-                Some((t, l)) => {
-                    col_num += l;
-                    tokens.push(MarkedToken {
-                        line: line_num + 1,
-                        column: col_num + 1,
-                        data: t,
-                    });
-                    consumed_len += l;
+                _ => {
+                    return Some(Ok((self.location, token, token_location)));
                 }
             }
         }
-
-        if let Some((line, col)) = multi_comment_starts.pop() {
-            return Err(LexerError::UnclosedStartComment { line, col });
-        }
-
-        Ok(tokens)
     }
 }
 
@@ -752,163 +638,280 @@ impl Lexer {
 mod lexer_tests {
     use super::*;
 
-    fn check_tokens(lexed: Vec<MarkedToken>, reference: Vec<Token>) -> bool {
-        reference
-            == (lexed
-                .iter()
-                .cloned()
-                .map(|x| x.unmark())
-                .collect::<Vec<Token>>())
+    fn check_tokens(
+        lexed: Vec<(Location, Token, Location)>,
+        reference: Vec<Token>,
+    ) -> bool {
+        reference == lexed.into_iter().map(|x| x.1).collect::<Vec<_>>()
     }
 
     #[test]
     fn parens() {
-        let lexer = Lexer::new_c0c_lexer();
-        assert!(check_tokens(lexer.tokenize("").expect(""), vec![]));
         assert!(check_tokens(
-            lexer.tokenize("(").expect(""),
-            vec![Token::LPAREN]
+            Lexer::new_c0c_lexer("").tokenize().expect(""),
+            vec![]
         ));
         assert!(check_tokens(
-            lexer.tokenize("(((").expect(""),
-            vec![Token::LPAREN, Token::LPAREN, Token::LPAREN]
+            Lexer::new_c0c_lexer("(").tokenize().expect(""),
+            vec![Token {
+                token_type: TokenType::LPAREN,
+                data: "("
+            }]
         ));
         assert!(check_tokens(
-            lexer.tokenize("()(())()").expect(""),
+            Lexer::new_c0c_lexer("(((").tokenize().expect(""),
             vec![
-                Token::LPAREN,
-                Token::RPAREN,
-                Token::LPAREN,
-                Token::LPAREN,
-                Token::RPAREN,
-                Token::RPAREN,
-                Token::LPAREN,
-                Token::RPAREN
+                Token {
+                    token_type: TokenType::LPAREN,
+                    data: "("
+                },
+                Token {
+                    token_type: TokenType::LPAREN,
+                    data: "("
+                },
+                Token {
+                    token_type: TokenType::LPAREN,
+                    data: "("
+                },
+            ]
+        ));
+        assert!(check_tokens(
+            Lexer::new_c0c_lexer("()(())()").tokenize().expect(""),
+            vec![
+                Token {
+                    token_type: TokenType::LPAREN,
+                    data: "("
+                },
+                Token {
+                    token_type: TokenType::RPAREN,
+                    data: ")"
+                },
+                Token {
+                    token_type: TokenType::LPAREN,
+                    data: "("
+                },
+                Token {
+                    token_type: TokenType::LPAREN,
+                    data: "("
+                },
+                Token {
+                    token_type: TokenType::RPAREN,
+                    data: ")"
+                },
+                Token {
+                    token_type: TokenType::RPAREN,
+                    data: ")"
+                },
+                Token {
+                    token_type: TokenType::LPAREN,
+                    data: "("
+                },
+                Token {
+                    token_type: TokenType::RPAREN,
+                    data: ")"
+                },
             ]
         ));
     }
 
     #[test]
     fn keywords() {
-        let lexer = Lexer::new_c0c_lexer();
         assert!(check_tokens(
-            lexer.tokenize("if if for if for for").expect(""),
+            Lexer::new_c0c_lexer("if if for if for for")
+                .tokenize()
+                .expect(""),
             vec![
-                Token::IF,
-                Token::IF,
-                Token::FOR,
-                Token::IF,
-                Token::FOR,
-                Token::FOR,
+                Token {
+                    token_type: TokenType::IF,
+                    data: "if"
+                },
+                Token {
+                    token_type: TokenType::IF,
+                    data: "if"
+                },
+                Token {
+                    token_type: TokenType::FOR,
+                    data: "for"
+                },
+                Token {
+                    token_type: TokenType::IF,
+                    data: "if"
+                },
+                Token {
+                    token_type: TokenType::FOR,
+                    data: "for"
+                },
+                Token {
+                    token_type: TokenType::FOR,
+                    data: "for"
+                },
             ]
         ));
     }
 
     #[test]
     fn full_main() {
-        let lexer = Lexer::new_c0c_lexer();
         assert!(check_tokens(
-            lexer.tokenize("int main() {\n  return 0;\n}").expect(""),
+            Lexer::new_c0c_lexer("int main() {\n  return 0;\n}")
+                .tokenize()
+                .expect(""),
             vec![
-                Token::INT,
-                Token::IDENT(String::from("main")),
-                Token::LPAREN,
-                Token::RPAREN,
-                Token::LBRACE,
-                Token::RETURN,
-                Token::DECNUM(String::from("0")),
-                Token::SEMICOLON,
-                Token::RBRACE,
+                Token {
+                    token_type: TokenType::INT,
+                    data: "int"
+                },
+                Token {
+                    token_type: TokenType::IDENT,
+                    data: "main"
+                },
+                Token {
+                    token_type: TokenType::LPAREN,
+                    data: "("
+                },
+                Token {
+                    token_type: TokenType::RPAREN,
+                    data: ")"
+                },
+                Token {
+                    token_type: TokenType::LBRACE,
+                    data: "{"
+                },
+                Token {
+                    token_type: TokenType::RETURN,
+                    data: "return"
+                },
+                Token {
+                    token_type: TokenType::DECNUM,
+                    data: "0"
+                },
+                Token {
+                    token_type: TokenType::SEMICOLON,
+                    data: ";"
+                },
+                Token {
+                    token_type: TokenType::RBRACE,
+                    data: "}"
+                },
             ]
         ));
 
         assert!(check_tokens(
-            lexer.tokenize("int main() {\n  int x = 0x17;\n  int z = x * 20;\n  return z - z;\n}").expect(""),
+            Lexer::new_c0c_lexer("int main() {\n  int x = 0x17;\n  int z = x * 20;\n  return z - z;\n}").tokenize().expect(""),
             vec![
-                Token::INT,
-                Token::IDENT(String::from("main")),
-                Token::LPAREN,
-                Token::RPAREN,
-                Token::LBRACE,
-                Token::INT,
-                Token::IDENT(String::from("x")),
-                Token::EQUALS,
-                Token::HEXNUM(String::from("0x17")),
-                Token::SEMICOLON,
-                Token::INT,
-                Token::IDENT(String::from("z")),
-                Token::EQUALS,
-                Token::IDENT(String::from("x")),
-                Token::TIMES,
-                Token::DECNUM(String::from("20")),
-                Token::SEMICOLON,
-                Token::RETURN,
-                Token::IDENT(String::from("z")),
-                Token::MINUS,
-                Token::IDENT(String::from("z")),
-                Token::SEMICOLON,
-                Token::RBRACE,
+                Token{token_type: TokenType::INT, data: "int"},
+                Token{token_type: TokenType::IDENT, data: "main"},
+                Token{token_type: TokenType::LPAREN, data: "("},
+                Token{token_type: TokenType::RPAREN, data: ")"},
+                Token{token_type: TokenType::LBRACE, data: "{"},
+                Token{token_type: TokenType::INT, data: "int"},
+                Token{token_type: TokenType::IDENT, data: "x"},
+                Token{token_type: TokenType::EQUALS, data: "="},
+                Token{token_type: TokenType::HEXNUM, data: "0x17"},
+                Token{token_type: TokenType::SEMICOLON, data: ";"},
+                Token{token_type: TokenType::INT, data: "int"},
+                Token{token_type: TokenType::IDENT, data: "z"},
+                Token{token_type: TokenType::EQUALS, data: "="},
+                Token{token_type: TokenType::IDENT, data: "x"},
+                Token{token_type: TokenType::TIMES, data: "*"},
+                Token{token_type: TokenType::DECNUM, data: "20"},
+                Token{token_type: TokenType::SEMICOLON, data: ";"},
+                Token{token_type: TokenType::RETURN, data: "return"},
+                Token{token_type: TokenType::IDENT, data: "z"},
+                Token{token_type: TokenType::MINUS, data: "-"},
+                Token{token_type: TokenType::IDENT, data: "z"},
+                Token{token_type: TokenType::SEMICOLON, data: ";"},
+                Token{token_type: TokenType::RBRACE, data: "}"},
             ]
         ));
     }
 
     #[test]
     fn invalid_character() {
-        let lexer = Lexer::new_c0c_lexer();
         assert_eq!(
-            lexer.tokenize("if if for & if for for").expect_err(""),
+            Lexer::new_c0c_lexer("if if for \\ if for for")
+                .tokenize()
+                .expect_err(""),
             LexerError::UnrecognizedCharacter { line: 1, col: 11 }
         );
     }
 
     #[test]
     fn mixed_single_line() {
-        let lexer = Lexer::new_c0c_lexer();
-        assert!(
-            check_tokens(
-                lexer.tokenize(
-                    "int main() {\n// what a cool comment *//*\n    return 0;\n}"
-                ).expect(""),
-                vec![
-                    Token::INT,
-                    Token::IDENT(String::from("main")),
-                    Token::LPAREN,
-                    Token::RPAREN,
-                    Token::LBRACE,
-                    Token::RETURN,
-                    Token::DECNUM(String::from("0")),
-                    Token::SEMICOLON,
-                    Token::RBRACE
-                ]
+        assert!(check_tokens(
+            Lexer::new_c0c_lexer(
+                "int main() {\n// what a cool comment *//*\n    return 0;\n}"
             )
-        );
+            .tokenize()
+            .expect(""),
+            vec![
+                Token {
+                    token_type: TokenType::INT,
+                    data: "int"
+                },
+                Token {
+                    token_type: TokenType::IDENT,
+                    data: "main"
+                },
+                Token {
+                    token_type: TokenType::LPAREN,
+                    data: "("
+                },
+                Token {
+                    token_type: TokenType::RPAREN,
+                    data: ")"
+                },
+                Token {
+                    token_type: TokenType::LBRACE,
+                    data: "{"
+                },
+                Token {
+                    token_type: TokenType::RETURN,
+                    data: "return"
+                },
+                Token {
+                    token_type: TokenType::DECNUM,
+                    data: "0"
+                },
+                Token {
+                    token_type: TokenType::SEMICOLON,
+                    data: ";"
+                },
+                Token {
+                    token_type: TokenType::RBRACE,
+                    data: "}"
+                },
+            ]
+        ));
     }
 
     #[test]
     fn nested_multi_line() {
-        let lexer = Lexer::new_c0c_lexer();
         assert!(check_tokens(
-            lexer.tokenize("/* /* /* */ /* */ */ */").expect(""),
+            Lexer::new_c0c_lexer("/* /* /* */ /* */ */ */")
+                .tokenize()
+                .expect(""),
             vec![]
         ));
     }
 
     #[test]
     fn incorrectly_nested_multiline() {
-        let lexer = Lexer::new_c0c_lexer();
         assert_eq!(
-            lexer.tokenize("/* /* /* */ /* */ */").expect_err(""),
+            Lexer::new_c0c_lexer("/* /* /* */ /* */ */")
+                .tokenize()
+                .expect_err(""),
             LexerError::UnclosedStartComment { line: 1, col: 1 }
         );
     }
 
     #[test]
     fn unopened_end_comment() {
-        let lexer = Lexer::new_c0c_lexer();
         assert_eq!(
-            lexer.tokenize(
+            Lexer::new_c0c_lexer(
                 "int main() {\n/* what a cool comment */\n    return 0;\n}\n*/"
-            ).expect_err(""),
+            )
+            .tokenize()
+            .expect_err(""),
             LexerError::UnopenedEndComment { line: 5, col: 1 }
         );
     }

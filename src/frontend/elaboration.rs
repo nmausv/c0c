@@ -5,11 +5,11 @@ use std::collections::VecDeque;
 use super::ast;
 use super::elab_ast;
 
-fn elaborate_binop(
-    eleft: &ast::Exp,
+fn elaborate_binop<'input>(
+    eleft: &ast::Exp<'input>,
     binop: &ast::BinOp,
-    eright: &ast::Exp,
-) -> elab_ast::Exp {
+    eright: &ast::Exp<'input>,
+) -> elab_ast::Exp<'input> {
     let elab_left = Box::new(elaborate_exp(eleft));
     let elab_right = Box::new(elaborate_exp(eright));
 
@@ -38,11 +38,11 @@ fn elaborate_binop(
     }
 }
 
-fn elaborate_exp(exp: &ast::Exp) -> elab_ast::Exp {
+fn elaborate_exp<'input>(exp: &ast::Exp<'input>) -> elab_ast::Exp<'input> {
     match exp {
         ast::Exp::Num(n) => elab_ast::Exp::Num(*n as i32),
         ast::Exp::Lvalue(ast::Lvalue::Ident(name)) => {
-            elab_ast::Exp::Lvalue(name.clone().into())
+            elab_ast::Exp::Lvalue((*name).into())
         }
         ast::Exp::BinOp(e1, binop, e2) => elaborate_binop(e1, binop, e2),
         // extra handling for negative literals
@@ -79,13 +79,15 @@ fn elaborate_exp(exp: &ast::Exp) -> elab_ast::Exp {
 ///     return x;
 /// }
 /// ```
-fn elaborate_stmt(stmt: &ast::Stmt) -> Result<elab_ast::Stmt, ()> {
+fn elaborate_stmt<'input>(
+    stmt: &ast::Stmt<'input>,
+) -> Result<elab_ast::Stmt<'input>, ()> {
     match stmt {
         ast::Stmt::Declare(_, _) => Err(()),
         ast::Stmt::DeclareAssign(_, _, _) => Err(()),
         ast::Stmt::Block(b) => elaborate_stmts(b),
         ast::Stmt::Assign(ast::Lvalue::Ident(name), asnop, exp) => {
-            let lval: elab_ast::Lvalue = name.clone().into();
+            let lval: elab_ast::Lvalue = (*name).into();
             let elab_exp = match asnop {
                 ast::AsnOp::Eq => elaborate_exp(exp),
                 ast::AsnOp::PlusEq => elab_ast::Exp::PureBinop(
@@ -143,9 +145,9 @@ fn elaborate_stmt(stmt: &ast::Stmt) -> Result<elab_ast::Stmt, ()> {
         }
         ast::Stmt::PostOp(ast::Lvalue::Ident(var), ast::PostOp::PlusPlus) => {
             Ok(elab_ast::Stmt::Assign(
-                var.clone().into(),
+                (*var).into(),
                 elab_ast::Exp::PureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(var.clone().into())),
+                    Box::new(elab_ast::Exp::Lvalue((*var).into())),
                     elab_ast::PureBinOp::Plus,
                     Box::new(elab_ast::Exp::Num(1)),
                 ),
@@ -153,11 +155,9 @@ fn elaborate_stmt(stmt: &ast::Stmt) -> Result<elab_ast::Stmt, ()> {
         }
         ast::Stmt::PostOp(ast::Lvalue::Ident(var), ast::PostOp::MinusMinus) => {
             Ok(elab_ast::Stmt::Assign(
-                var.clone().into(),
+                (*var).into(),
                 elab_ast::Exp::PureBinop(
-                    Box::new(elab_ast::Exp::from(elab_ast::Lvalue::from(
-                        var.clone(),
-                    ))),
+                    Box::new(elab_ast::Exp::from(elab_ast::Lvalue::from(*var))),
                     elab_ast::PureBinOp::Minus,
                     Box::new(elab_ast::Exp::Num(1)),
                 ),
@@ -207,7 +207,7 @@ fn elaborate_stmt(stmt: &ast::Stmt) -> Result<elab_ast::Stmt, ()> {
             if let Some(init) = init {
                 match &**init {
                     ast::Stmt::Declare(name, t) => Ok(elab_ast::Stmt::Declare(
-                        name.clone(),
+                        name,
                         *t,
                         Box::new(elab_ast::Stmt::While {
                             cond: elab_cond,
@@ -216,12 +216,12 @@ fn elaborate_stmt(stmt: &ast::Stmt) -> Result<elab_ast::Stmt, ()> {
                     )),
                     ast::Stmt::DeclareAssign(name, t, exp) => {
                         Ok(elab_ast::Stmt::Declare(
-                            name.clone(),
+                            name,
                             *t,
                             Box::new(elab_ast::Stmt::Seq(
                                 [
                                     elab_ast::Stmt::Assign(
-                                        name.clone().into(),
+                                        (*name).into(),
                                         elaborate_exp(exp),
                                     ),
                                     elab_ast::Stmt::While {
@@ -270,7 +270,9 @@ fn elaborate_stmt(stmt: &ast::Stmt) -> Result<elab_ast::Stmt, ()> {
     }
 }
 
-fn elaborate_stmts(stmts: &[ast::Stmt]) -> Result<elab_ast::Stmt, ()> {
+fn elaborate_stmts<'input>(
+    stmts: &[ast::Stmt<'input>],
+) -> Result<elab_ast::Stmt<'input>, ()> {
     if stmts.is_empty() {
         return Ok(elab_ast::Stmt::Nop);
     }
@@ -285,7 +287,7 @@ fn elaborate_stmts(stmts: &[ast::Stmt]) -> Result<elab_ast::Stmt, ()> {
 
     if let ast::Stmt::Declare(name, t) = first {
         return Ok(elab_ast::Stmt::Declare(
-            name.clone(),
+            name,
             *t,
             Box::new(elaborate_stmts(rest)?),
         ));
@@ -320,11 +322,11 @@ fn elaborate_stmts(stmts: &[ast::Stmt]) -> Result<elab_ast::Stmt, ()> {
 
     if let ast::Stmt::DeclareAssign(name, t, exp) = first {
         seq_rest.push_front(elab_ast::Stmt::Assign(
-            name.clone().into(),
+            (*name).into(),
             elaborate_exp(exp),
         ));
         return Ok(elab_ast::Stmt::Declare(
-            name.clone(),
+            name,
             *t,
             Box::new(elab_ast::Stmt::Seq(seq_rest)),
         ));

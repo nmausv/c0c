@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::frontend::elab_ast::{Exp, Ident, Lvalue, Program, Stmt, Type};
 
-type VarSet = HashSet<Ident>;
-type TypeMap = HashMap<Ident, Type>;
+type VarSet<'input> = HashSet<Ident<'input>>;
+type TypeMap<'input> = HashMap<Ident<'input>, Type>;
 
 // true if and only if the expression uses only variables in the set
 fn exp_uses_only(exp: &Exp, initialized: &VarSet) -> bool {
@@ -32,15 +32,18 @@ fn exp_uses_only(exp: &Exp, initialized: &VarSet) -> bool {
 }
 
 #[derive(Clone)]
-struct StmtEnv {
-    initialized: VarSet,
-    inscope: TypeMap,
+struct StmtEnv<'input> {
+    initialized: VarSet<'input>,
+    inscope: TypeMap<'input>,
 }
 
 /// Given an environment `env` and a statment `s`, returns a new environment `s'`
 /// if `s` assigns only to variables in the scope of `env`, and uses only variables initialized in `env`,
 /// leaving a resulting environment of `s'`.
-fn stmt_initializes(mut env: StmtEnv, s: &Stmt) -> Option<StmtEnv> {
+fn stmt_initializes<'input>(
+    mut env: StmtEnv<'input>,
+    s: &'input Stmt,
+) -> Option<StmtEnv<'input>> {
     match s {
         Stmt::Nop => Some(env),
         Stmt::Seq(v) => {
@@ -53,7 +56,7 @@ fn stmt_initializes(mut env: StmtEnv, s: &Stmt) -> Option<StmtEnv> {
         Stmt::Assign(Lvalue::Ident(x), e) => {
             if env.inscope.contains_key(x) && exp_uses_only(e, &env.initialized)
             {
-                env.initialized.insert(x.clone());
+                env.initialized.insert(x);
                 Some(env)
             } else {
                 //TODO: add verbose mode?
@@ -72,7 +75,7 @@ fn stmt_initializes(mut env: StmtEnv, s: &Stmt) -> Option<StmtEnv> {
             if exp_uses_only(e, &env.initialized) {
                 env.initialized.drain();
                 for key in env.inscope.keys() {
-                    env.initialized.insert(key.clone());
+                    env.initialized.insert(key);
                 }
                 Some(env)
             } else {
@@ -85,7 +88,7 @@ fn stmt_initializes(mut env: StmtEnv, s: &Stmt) -> Option<StmtEnv> {
                 println!("double declaration");
                 return None;
             }
-            env.inscope.insert(x.clone(), *t);
+            env.inscope.insert(x, *t);
             let mut new_env = stmt_initializes(env, scope)?;
             new_env.inscope.remove(x);
             new_env.initialized.remove(x);
@@ -172,22 +175,16 @@ mod init_tests {
 
     #[test]
     fn declare_only() {
-        let program: Program = Stmt::Declare(
-            String::from("x"),
-            Type::Int,
-            Box::new(Stmt::Return(Exp::Num(0))),
-        )
-        .into();
+        let program: Program =
+            Stmt::Declare("x", Type::Int, Box::new(Stmt::Return(Exp::Num(0))))
+                .into();
         assert!(initialization_check(&program));
     }
 
     #[test]
     fn use_before_declare() {
         let program: Program = Stmt::Seq(VecDeque::from(vec![
-            Stmt::Assign(
-                String::from("x").into(),
-                Exp::Lvalue(String::from("x").into()),
-            ),
+            Stmt::Assign("x".into(), Exp::Lvalue("x".into())),
             Stmt::Return(Exp::Num(0)),
         ]))
         .into();
@@ -197,11 +194,8 @@ mod init_tests {
     #[test]
     fn use_out_of_scope() {
         let program: Program = Stmt::Seq(VecDeque::from(vec![
-            Stmt::Declare(String::from("x"), Type::Int, Box::new(Stmt::Nop)),
-            Stmt::Assign(
-                String::from("x").into(),
-                Exp::Lvalue(String::from("x").into()),
-            ),
+            Stmt::Declare("x", Type::Int, Box::new(Stmt::Nop)),
+            Stmt::Assign("x".into(), Exp::Lvalue("x".into())),
         ]))
         .into();
         assert!(!initialization_check(&program));
@@ -210,14 +204,11 @@ mod init_tests {
     #[test]
     fn use_after_return() {
         let program: Program = Stmt::Declare(
-            String::from("x"),
+            "x",
             Type::Int,
             Box::new(Stmt::Seq(VecDeque::from(vec![
                 Stmt::Return(Exp::Num(0)),
-                Stmt::Assign(
-                    String::from("x").into(),
-                    Exp::Lvalue(String::from("x").into()),
-                ),
+                Stmt::Assign("x".into(), Exp::Lvalue("x".into())),
             ]))),
         )
         .into();
@@ -229,14 +220,11 @@ mod init_tests {
         let program: Program = Stmt::Seq(VecDeque::from(vec![
             Stmt::Return(Exp::Num(0)),
             Stmt::Declare(
-                String::from("x"),
+                "x",
                 Type::Int,
                 Box::new(Stmt::Seq(VecDeque::from(vec![
-                    Stmt::Assign(String::from("x").into(), Exp::Num(0)),
-                    Stmt::Assign(
-                        String::from("x").into(),
-                        Exp::Lvalue(String::from("x").into()),
-                    ),
+                    Stmt::Assign("x".into(), Exp::Num(0)),
+                    Stmt::Assign("x".into(), Exp::Lvalue("x".into())),
                 ]))),
             ),
         ]))
@@ -249,22 +237,16 @@ mod init_tests {
         // NOT VALID
         // int main() {int x = 0; int x = 1; x = x;}
         let program_noscope: Program = Stmt::Declare(
-            String::from("x"),
+            "x",
             Type::Int,
             Box::new(Stmt::Seq(VecDeque::from(vec![
-                Stmt::Assign(String::from("x").into(), Exp::Num(0)),
+                Stmt::Assign("x".into(), Exp::Num(0)),
                 Stmt::Declare(
-                    String::from("x"),
+                    "x",
                     Type::Int,
-                    Box::new(Stmt::Assign(
-                        String::from("x").into(),
-                        Exp::Num(1),
-                    )),
+                    Box::new(Stmt::Assign("x".into(), Exp::Num(1))),
                 ),
-                Stmt::Assign(
-                    String::from("x").into(),
-                    Exp::Lvalue(String::from("x").into()),
-                ),
+                Stmt::Assign("x".into(), Exp::Lvalue("x".into())),
             ]))),
         )
         .into();
@@ -274,16 +256,16 @@ mod init_tests {
         // int main() {{int x = 0;} int x = 1; x = x;}
         let program_scope: Program = Stmt::Seq(VecDeque::from(vec![
             Stmt::Declare(
-                String::from("x"),
+                "x",
                 Type::Int,
-                Box::new(Stmt::Assign(String::from("x").into(), Exp::Num(0))),
+                Box::new(Stmt::Assign("x".into(), Exp::Num(0))),
             ),
             Stmt::Declare(
-                String::from("x"),
+                "x",
                 Type::Int,
                 Box::new(Stmt::Seq(VecDeque::from(vec![
-                    Stmt::Assign(String::from("x").into(), Exp::Num(1)),
-                    Stmt::Return(Exp::Lvalue(String::from("x").into())),
+                    Stmt::Assign("x".into(), Exp::Num(1)),
+                    Stmt::Return(Exp::Lvalue("x".into())),
                 ]))),
             ),
         ]))

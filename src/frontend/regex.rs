@@ -30,7 +30,7 @@ impl RegExp {
     /// Essentially, given a word `w`, this will create a `RegExp` that matches
     /// each character from `w` in order.
     pub fn from_word(w: &str) -> RegExp {
-        if w.len() == 0 {
+        if w.is_empty() {
             RegExp::Empty
         } else if w.len() == 1 {
             // optimization, use single without empty
@@ -55,7 +55,7 @@ impl RegExp {
     /// Essentially, given a string of characters, this will create a `RegExp`
     /// each character from `w` in order.
     pub fn from_charlist(w: &str) -> RegExp {
-        if w.len() == 0 {
+        if w.is_empty() {
             RegExp::Empty
         } else if w.len() == 1 {
             RegExp::Single(w.chars().next().unwrap())
@@ -177,15 +177,13 @@ impl DFA {
         // final state at 1
         nfa.states.push(Some(true));
         // transition
-        nfa.transitions.insert((0, &pat), HashSet::from([1]));
+        nfa.transitions.insert((0, pat), HashSet::from([1]));
 
         // keep worklist of transition labels to decompose
         let mut worklist: Vec<(DFAState, &RegExp, DFAState)> =
-            vec![(0, &pat, 1)];
+            vec![(0, pat, 1)];
 
-        while !worklist.is_empty() {
-            let (start, pat, end) = worklist.pop().unwrap();
-
+        while let Some((start, pat, end)) = worklist.pop() {
             match pat {
                 RegExp::Or(r, s) => {
                     nfa.insert_transition(start, r, end);
@@ -304,9 +302,6 @@ impl DFA {
             (post, true) => (post, Some(0)),
             (post, false) => (post, None),
         };
-
-        // move back into pre_states to set up the loop
-        // pre_states = post_states.clone();
 
         for (i, c) in s.chars().enumerate() {
             // transition via c

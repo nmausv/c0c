@@ -1,10 +1,10 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Program {
-    pub name: String,
-    pub body: Vec<Stmt>,
+pub struct Program<'input> {
+    pub name: &'input str,
+    pub body: Vec<Stmt<'input>>,
 }
 
-impl std::fmt::Display for Program {
+impl<'input> std::fmt::Display for Program<'input> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{} defined as {{", self.name)?;
         let _ = self
@@ -17,32 +17,32 @@ impl std::fmt::Display for Program {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Stmt {
-    Declare(Ident, Type),
-    DeclareAssign(Ident, Type, Exp),
-    Assign(Lvalue, AsnOp, Exp),
-    Block(Vec<Stmt>),
-    Return(Exp),
+pub enum Stmt<'input> {
+    Declare(Ident<'input>, Type),
+    DeclareAssign(Ident<'input>, Type, Exp<'input>),
+    Assign(Lvalue<'input>, AsnOp, Exp<'input>),
+    Block(Vec<Stmt<'input>>),
+    Return(Exp<'input>),
     If {
-        cond: Exp,
-        branch_true: Box<Stmt>,
-        branch_false: Option<Box<Stmt>>,
+        cond: Exp<'input>,
+        branch_true: Box<Stmt<'input>>,
+        branch_false: Option<Box<Stmt<'input>>>,
     },
     While {
-        cond: Exp,
-        body: Box<Stmt>,
+        cond: Exp<'input>,
+        body: Box<Stmt<'input>>,
     },
     For {
-        init: Option<Box<Stmt>>,
-        cond: Exp,
-        step: Option<Box<Stmt>>,
-        body: Box<Stmt>,
+        init: Option<Box<Stmt<'input>>>,
+        cond: Exp<'input>,
+        step: Option<Box<Stmt<'input>>>,
+        body: Box<Stmt<'input>>,
     },
-    PostOp(Lvalue, PostOp),
-    Exp(Exp),
+    PostOp(Lvalue<'input>, PostOp),
+    Exp(Exp<'input>),
 }
 
-impl std::fmt::Display for Stmt {
+impl<'input> std::fmt::Display for Stmt<'input> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Declare(var, t) => write!(f, "{t} {var};"),
@@ -92,21 +92,21 @@ impl std::fmt::Display for Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Exp {
+pub enum Exp<'input> {
     Num(Num),
-    Lvalue(Lvalue),
-    BinOp(Box<Exp>, BinOp, Box<Exp>),
-    UnOp(UnOp, Box<Exp>),
+    Lvalue(Lvalue<'input>),
+    BinOp(Box<Exp<'input>>, BinOp, Box<Exp<'input>>),
+    UnOp(UnOp, Box<Exp<'input>>),
     True,
     False,
     Ternary {
-        cond: Box<Exp>,
-        branch_true: Box<Exp>,
-        branch_false: Box<Exp>,
+        cond: Box<Exp<'input>>,
+        branch_true: Box<Exp<'input>>,
+        branch_false: Box<Exp<'input>>,
     },
 }
 
-impl std::fmt::Display for Exp {
+impl<'input> std::fmt::Display for Exp<'input> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Num(n) => write!(f, "{n}"),
@@ -125,13 +125,13 @@ impl std::fmt::Display for Exp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Lvalue {
-    Ident(String),
+pub enum Lvalue<'input> {
+    Ident(&'input str),
 }
 
-impl TryFrom<Exp> for Lvalue {
+impl<'input> TryFrom<Exp<'input>> for Lvalue<'input> {
     type Error = ();
-    fn try_from(value: Exp) -> Result<Self, Self::Error> {
+    fn try_from(value: Exp<'input>) -> Result<Self, Self::Error> {
         match value {
             Exp::Lvalue(l) => Ok(l),
             _ => Err(()),
@@ -139,7 +139,7 @@ impl TryFrom<Exp> for Lvalue {
     }
 }
 
-impl std::fmt::Display for Lvalue {
+impl<'input> std::fmt::Display for Lvalue<'input> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ident(s) => write!(f, "{s}"),
@@ -278,4 +278,4 @@ impl std::fmt::Display for Type {
 
 // terminals
 pub type Num = i128;
-pub type Ident = String;
+pub type Ident<'input> = &'input str;
