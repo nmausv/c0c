@@ -9,64 +9,98 @@ fn elaborate_binop<'input>(
     eleft: &ast::Exp<'input>,
     binop: &ast::BinOp,
     eright: &ast::Exp<'input>,
-) -> elab_ast::Exp<'input> {
-    let elab_left = Box::new(elaborate_exp(eleft));
-    let elab_right = Box::new(elaborate_exp(eright));
+) -> Result<elab_ast::Exp<'input>, ()> {
+    let elab_left = Box::new(elaborate_exp(eleft)?);
+    let elab_right = Box::new(elaborate_exp(eright)?);
 
     match binop {
-        ast::BinOp::LogAnd => elab_ast::Exp::Ternary {
+        ast::BinOp::LogAnd => Ok(elab_ast::Exp::Ternary {
             cond: elab_left,
             exp_true: elab_right,
             exp_false: Box::new(elab_ast::Exp::False),
-        },
-        ast::BinOp::LogOr => elab_ast::Exp::Ternary {
+        }),
+        ast::BinOp::LogOr => Ok(elab_ast::Exp::Ternary {
             cond: elab_left,
             exp_true: Box::new(elab_ast::Exp::True),
             exp_false: elab_right,
-        },
+        }),
         ast_binop => match elab_ast::BinOp::try_from(*ast_binop) {
             Ok(elab_ast::BinOp::Pure(op)) => {
-                elab_ast::Exp::PureBinop(elab_left, op, elab_right)
+                Ok(elab_ast::Exp::PureBinop(elab_left, op, elab_right))
             }
             Ok(elab_ast::BinOp::Impure(op)) => {
-                elab_ast::Exp::ImpureBinop(elab_left, op, elab_right)
+                Ok(elab_ast::Exp::ImpureBinop(elab_left, op, elab_right))
             }
-            _ => panic!(
-                "attempted conversion of && or || into single elaborated binop"
-            ),
+            _ => {
+                eprintln!("elaborate_binop: attempted conversion of && or || into a single elaborated binop");
+                Err(())
+            }
         },
     }
 }
 
-fn elaborate_exp<'input>(exp: &ast::Exp<'input>) -> elab_ast::Exp<'input> {
+fn elaborate_exp<'input>(
+    exp: &ast::Exp<'input>,
+) -> Result<elab_ast::Exp<'input>, ()> {
     match exp {
-        ast::Exp::Num(n) => elab_ast::Exp::Num(*n as i32),
+        ast::Exp::Num(ast::Num::DecNum(n)) => {
+            // bounds check decimal literals
+            if i128::from(i32::MIN) <= *n && *n <= i128::from(i32::MAX) + 1 {
+                Ok(elab_ast::Exp::Num(*n as i32))
+            } else {
+                eprintln!(
+                    "elaborate_exp: integer literal {n} failed bounds check"
+                );
+                Err(())
+            }
+        }
+        ast::Exp::Num(ast::Num::HexNum(n)) => {
+            // bounds check hex literals
+            if *n <= i128::from(u32::MAX) {
+                Ok(elab_ast::Exp::Num(*n as i32))
+            } else {
+                eprintln!(
+                    "elaborate_exp: integer literal {n:#} failed bounds check"
+                );
+                Err(())
+            }
+        }
         ast::Exp::Lvalue(ast::Lvalue::Ident(name)) => {
-            elab_ast::Exp::Lvalue((*name).into())
+            Ok(elab_ast::Exp::Lvalue((*name).into()))
         }
         ast::Exp::BinOp(e1, binop, e2) => elaborate_binop(e1, binop, e2),
         // extra handling for negative literals
         ast::Exp::UnOp(op, exp) => match (op, &**exp) {
-            (ast::UnOp::Negative, ast::Exp::Num(ref n)) => {
-                elab_ast::Exp::Num((-n) as i32)
+            (ast::UnOp::Negative, ast::Exp::Num(ast::Num::DecNum(n))) => {
+                // bounds check negative integer literals
+                if i128::from(i32::MIN) <= -(*n)
+                    && -(*n) <= i128::from(i32::MAX) + 1
+                {
+                    Ok(elab_ast::Exp::Num((-n) as i32))
+                } else {
+                    eprintln!(
+                        "integer literal {n} failed negation bounds check"
+                    );
+                    Err(())
+                }
             }
-            _ => elab_ast::Exp::UnOp(*op, Box::new(elaborate_exp(exp))),
+            _ => Ok(elab_ast::Exp::UnOp(*op, Box::new(elaborate_exp(exp)?))),
         },
-        ast::Exp::True => elab_ast::Exp::True,
-        ast::Exp::False => elab_ast::Exp::False,
+        ast::Exp::True => Ok(elab_ast::Exp::True),
+        ast::Exp::False => Ok(elab_ast::Exp::False),
         ast::Exp::Ternary {
             cond,
             branch_true,
             branch_false,
-        } => elab_ast::Exp::Ternary {
-            cond: Box::new(elaborate_exp(cond)),
-            exp_true: Box::new(elaborate_exp(branch_true)),
-            exp_false: Box::new(elaborate_exp(branch_false)),
-        },
+        } => Ok(elab_ast::Exp::Ternary {
+            cond: Box::new(elaborate_exp(cond)?),
+            exp_true: Box::new(elaborate_exp(branch_true)?),
+            exp_false: Box::new(elaborate_exp(branch_false)?),
+        }),
     }
 }
 
-/// elaborates a single statement, but since `Declare` and `DeclareAssign`
+/// Elaborates a single statement, but since `Declare` and `DeclareAssign`
 /// have unique interactions with subsequent statements, these statements
 /// cannot be evaluated individually using this function.
 ///
@@ -89,56 +123,56 @@ fn elaborate_stmt<'input>(
         ast::Stmt::Assign(ast::Lvalue::Ident(name), asnop, exp) => {
             let lval: elab_ast::Lvalue = (*name).into();
             let elab_exp = match asnop {
-                ast::AsnOp::Eq => elaborate_exp(exp),
+                ast::AsnOp::Eq => elaborate_exp(exp)?,
                 ast::AsnOp::PlusEq => elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval.clone())),
                     elab_ast::PureBinOp::Plus,
-                    Box::new(elaborate_exp(exp)),
+                    Box::new(elaborate_exp(exp)?),
                 ),
                 ast::AsnOp::MinusEq => elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval.clone())),
                     elab_ast::PureBinOp::Minus,
-                    Box::new(elaborate_exp(exp)),
+                    Box::new(elaborate_exp(exp)?),
                 ),
                 ast::AsnOp::TimesEq => elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval.clone())),
                     elab_ast::PureBinOp::Times,
-                    Box::new(elaborate_exp(exp)),
+                    Box::new(elaborate_exp(exp)?),
                 ),
                 ast::AsnOp::DivEq => elab_ast::Exp::ImpureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval.clone())),
                     elab_ast::ImpureBinOp::Divide,
-                    Box::new(elaborate_exp(exp)),
+                    Box::new(elaborate_exp(exp)?),
                 ),
                 ast::AsnOp::ModEq => elab_ast::Exp::ImpureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval.clone())),
                     elab_ast::ImpureBinOp::Modulo,
-                    Box::new(elaborate_exp(exp)),
+                    Box::new(elaborate_exp(exp)?),
                 ),
                 ast::AsnOp::AndEq => elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval.clone())),
                     elab_ast::PureBinOp::BitAnd,
-                    Box::new(elaborate_exp(exp)),
+                    Box::new(elaborate_exp(exp)?),
                 ),
                 ast::AsnOp::XorEq => elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval.clone())),
                     elab_ast::PureBinOp::BitXor,
-                    Box::new(elaborate_exp(exp)),
+                    Box::new(elaborate_exp(exp)?),
                 ),
                 ast::AsnOp::OrEq => elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval.clone())),
                     elab_ast::PureBinOp::BitOr,
-                    Box::new(elaborate_exp(exp)),
+                    Box::new(elaborate_exp(exp)?),
                 ),
                 ast::AsnOp::ShlEq => elab_ast::Exp::ImpureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval.clone())),
                     elab_ast::ImpureBinOp::Shl,
-                    Box::new(elaborate_exp(exp)),
+                    Box::new(elaborate_exp(exp)?),
                 ),
                 ast::AsnOp::ShrEq => elab_ast::Exp::ImpureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval.clone())),
                     elab_ast::ImpureBinOp::Shr,
-                    Box::new(elaborate_exp(exp)),
+                    Box::new(elaborate_exp(exp)?),
                 ),
             };
             Ok(elab_ast::Stmt::Assign(lval, elab_exp))
@@ -164,10 +198,10 @@ fn elaborate_stmt<'input>(
             ))
         }
         ast::Stmt::Return(exp) => {
-            Ok(elab_ast::Stmt::Return(elaborate_exp(exp)))
+            Ok(elab_ast::Stmt::Return(elaborate_exp(exp)?))
         }
         ast::Stmt::While { cond, body } => Ok(elab_ast::Stmt::While {
-            cond: elaborate_exp(cond),
+            cond: elaborate_exp(cond)?,
             body: Box::new(elaborate_stmt(body)?),
         }),
         ast::Stmt::For {
@@ -176,7 +210,7 @@ fn elaborate_stmt<'input>(
             step,
             body,
         } => {
-            let elab_cond = elaborate_exp(cond);
+            let elab_cond = elaborate_exp(cond)?;
             let elab_body = elaborate_stmt(body)?;
 
             let new_body: elab_ast::Stmt;
@@ -222,7 +256,7 @@ fn elaborate_stmt<'input>(
                                 [
                                     elab_ast::Stmt::Assign(
                                         (*name).into(),
-                                        elaborate_exp(exp),
+                                        elaborate_exp(exp)?,
                                     ),
                                     elab_ast::Stmt::While {
                                         cond: elab_cond,
@@ -261,40 +295,33 @@ fn elaborate_stmt<'input>(
                 None => elab_ast::Stmt::Nop,
             };
             Ok(elab_ast::Stmt::If {
-                cond: elaborate_exp(cond),
+                cond: elaborate_exp(cond)?,
                 stmt_true: Box::new(elaborate_stmt(branch_true)?),
                 stmt_false: Box::new(elab_false),
             })
         }
-        ast::Stmt::Exp(exp) => Ok(elab_ast::Stmt::Exp(elaborate_exp(exp))),
+        ast::Stmt::Exp(exp) => Ok(elab_ast::Stmt::Exp(elaborate_exp(exp)?)),
     }
 }
 
 fn elaborate_stmts<'input>(
     stmts: &[ast::Stmt<'input>],
 ) -> Result<elab_ast::Stmt<'input>, ()> {
-    if stmts.is_empty() {
-        return Ok(elab_ast::Stmt::Nop);
-    }
-
-    let (first, rest) = match stmts.split_first() {
-        Some((first, rest)) => (first, rest),
+    let (first, elab_rest) = match stmts.split_first() {
+        Some((first, rest)) => (first, elaborate_stmts(rest)?),
         None => return Ok(elab_ast::Stmt::Nop),
     };
-
-    // both declares and blocks don't (necessarily) want a sequence of the
-    // elaborated tail, so we defer that elaboration
 
     if let ast::Stmt::Declare(name, t) = first {
         return Ok(elab_ast::Stmt::Declare(
             name,
             *t,
-            Box::new(elaborate_stmts(rest)?),
+            Box::new(elab_rest),
         ));
     }
 
     if let ast::Stmt::Block(b) = first {
-        return match (elaborate_stmts(b)?, elaborate_stmts(rest)?) {
+        return match (elaborate_stmts(b)?, elab_rest) {
             (elab_ast::Stmt::Seq(mut seq1), elab_ast::Stmt::Seq(mut seq2)) => {
                 seq1.append(&mut seq2);
                 Ok(elab_ast::Stmt::Seq(seq1))
@@ -314,7 +341,7 @@ fn elaborate_stmts<'input>(
         };
     }
 
-    let mut seq_rest = match elaborate_stmts(rest)? {
+    let mut seq_rest = match elab_rest {
         elab_ast::Stmt::Seq(v) => v,
         elab_ast::Stmt::Nop => VecDeque::new(),
         s => VecDeque::from(vec![s]),
@@ -323,7 +350,7 @@ fn elaborate_stmts<'input>(
     if let ast::Stmt::DeclareAssign(name, t, exp) = first {
         seq_rest.push_front(elab_ast::Stmt::Assign(
             (*name).into(),
-            elaborate_exp(exp),
+            elaborate_exp(exp)?,
         ));
         return Ok(elab_ast::Stmt::Declare(
             name,
@@ -339,11 +366,9 @@ fn elaborate_stmts<'input>(
     Ok(elab_ast::Stmt::Seq(seq_rest))
 }
 
-pub fn elaborate(program: ast::Program) -> elab_ast::Program {
+pub fn elaborate(program: ast::Program) -> Result<elab_ast::Program, ()> {
     // assert that main function is identified as main
     assert!(program.name == "main");
 
-    elaborate_stmts(&program.body)
-        .expect("could not elaborate program:")
-        .into()
+    elaborate_stmts(&program.body).map(|s| s.into())
 }

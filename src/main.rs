@@ -1,4 +1,9 @@
-#![allow(dead_code, non_camel_case_types, clippy::upper_case_acronyms)]
+#![allow(
+    dead_code,
+    non_camel_case_types,
+    clippy::upper_case_acronyms,
+    clippy::needless_lifetimes
+)]
 
 mod codegen;
 mod frontend;
@@ -51,7 +56,7 @@ struct Args {
 }
 
 fn compile(
-    program: String,
+    program: &str,
     verbose: bool,
     target: codegen::Target,
 ) -> Result<String, ()> {
@@ -59,9 +64,9 @@ fn compile(
         println!("program to compile: \n[{program}]");
     }
 
-    let lexer = frontend::lexer::Lexer::new_c0c_lexer(&program);
+    let lexer = frontend::lexer::Lexer::new_c0c_lexer(program);
     let parser = frontend::c0parser::ProgramParser::new();
-    let ast = match parser.parse(&program, lexer) {
+    let ast = match parser.parse(program, lexer) {
         Ok(p) => p,
         Err(_) => {
             eprint!("failed parsing...");
@@ -71,7 +76,7 @@ fn compile(
     if verbose {
         println!("program parsed as:\n{ast}\n");
     }
-    let elab_ast = frontend::elaboration::elaborate(ast);
+    let elab_ast = frontend::elaboration::elaborate(ast)?;
     if verbose {
         println!("program elaborated to:\n{elab_ast}\n");
     }
@@ -112,7 +117,7 @@ fn main() {
         }
     };
 
-    if compile(program, cli.verbose, cli.target.into()).is_err() {
+    if compile(&program, cli.verbose, cli.target.into()).is_err() {
         println!("could not compile");
     }
 
@@ -166,7 +171,7 @@ mod tests {
 
                 // compile each file without verbose mode
                 let output = compile(
-                    file.clone(),
+                    &file,
                     false,
                     crate::codegen::Target::AbstractAssembly,
                 );
@@ -177,12 +182,12 @@ mod tests {
                     TestResult::DivZero => output.is_ok(),
                 } {
                     let output = compile(
-                        file.clone(),
+                        &file,
                         true,
                         crate::codegen::Target::AbstractAssembly,
-                    )
-                    .unwrap();
-                    dbg!(output);
+                    );
+                    dbg!(&output);
+                    let _ = output.unwrap();
                     panic!()
                 }
 

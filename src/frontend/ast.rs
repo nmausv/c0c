@@ -276,6 +276,52 @@ impl std::fmt::Display for Type {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Num {
+    DecNum(i128),
+    HexNum(i128),
+}
+
+impl std::fmt::Display for Num {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Num::DecNum(n) => write!(f, "{n}"),
+            Num::HexNum(n) => write!(f, "{:#x}", n),
+        }
+    }
+}
+
+impl AsRef<i128> for Num {
+    fn as_ref(&self) -> &i128 {
+        match self {
+            Num::DecNum(n) => n,
+            Num::HexNum(n) => n,
+        }
+    }
+}
+
+impl From<Num> for i128 {
+    fn from(value: Num) -> Self {
+        match value {
+            Num::DecNum(n) => n,
+            Num::HexNum(n) => n,
+        }
+    }
+}
+
+impl PartialEq for Num {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl Eq for Num {}
+
+impl PartialOrd for Num {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.as_ref().partial_cmp(other.as_ref())
+    }
+}
+
 // terminals
-pub type Num = i128;
 pub type Ident<'input> = &'input str;

@@ -45,23 +45,23 @@ mod parser_tests {
         let body = result.body[0].clone();
         let expected = Stmt::Return(Exp::BinOp(
             Box::new(Exp::BinOp(
-                Box::new(Exp::Num(1)),
+                Box::new(Exp::Num(Num::DecNum(1))),
                 BinOp::Plus,
-                Box::new(Exp::Num(2)),
+                Box::new(Exp::Num(Num::DecNum(2))),
             )),
             BinOp::Minus,
             Box::new(Exp::BinOp(
                 Box::new(Exp::BinOp(
                     Box::new(Exp::BinOp(
-                        Box::new(Exp::Num(3)),
+                        Box::new(Exp::Num(Num::DecNum(3))),
                         BinOp::Times,
-                        Box::new(Exp::Num(4)),
+                        Box::new(Exp::Num(Num::DecNum(4))),
                     )),
                     BinOp::Divide,
-                    Box::new(Exp::Num(5)),
+                    Box::new(Exp::Num(Num::DecNum(5))),
                 )),
                 BinOp::Modulo,
-                Box::new(Exp::Num(6)),
+                Box::new(Exp::Num(Num::DecNum(6))),
             )),
         ));
         dbg!(&body);
@@ -76,7 +76,7 @@ mod parser_tests {
         let result = parser.parse(input, lexer).unwrap();
         assert!(result.body.len() == 1);
         let body = result.body[0].clone();
-        let expected = Stmt::Return(Exp::Num(1));
+        let expected = Stmt::Return(Exp::Num(Num::DecNum(1)));
         dbg!(&body);
         assert!(body == expected);
     }
@@ -88,8 +88,6 @@ mod parser_tests {
         let parser = ProgramParser::new();
         let result = parser.parse(input, lexer).unwrap();
         dbg!(&result);
-        //TODO
-        assert!(true);
     }
 }
 
@@ -109,7 +107,7 @@ mod elaborate_tests {
         let ast = parser.parse(input, lexer);
         dbg!(&ast);
         assert!(ast.is_ok());
-        let elab_ast = elaborate(ast.unwrap());
+        let elab_ast = elaborate(ast.unwrap()).unwrap();
         dbg!(&elab_ast);
         assert!(elab_ast == elab_ast::Stmt::Nop.into());
     }
@@ -134,7 +132,7 @@ mod elaborate_tests {
         let ast = parser.parse(input, lexer);
         dbg!(&ast);
         assert!(ast.is_ok());
-        let elab_ast = elaborate(ast.unwrap());
+        let elab_ast = elaborate(ast.unwrap()).unwrap();
         dbg!(&elab_ast);
         assert!(
             elab_ast

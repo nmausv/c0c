@@ -146,10 +146,11 @@ PostOp: PostOp = {
 
 Num: Num = {
   DecNum => {
-    i128::from_str_radix(<>, 10).expect("integer literal too large")
+    #[allow(clippy::from_str_radix_10)]
+    Num::DecNum(i128::from_str_radix(<>, 10).expect("integer literal too large"))
   },
   HexNum => {
-    i128::from_str_radix(<>, 16).expect("hex literal too large")
+    Num::HexNum(i128::from_str_radix(<>.strip_prefix("0x").unwrap(), 16).expect("hex literal too large"))
   },
 };
 

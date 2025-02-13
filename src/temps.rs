@@ -61,7 +61,7 @@ pub struct TempFactory {
     labels_used: usize,
 }
 
-impl<'input> TempFactory {
+impl TempFactory {
     pub fn new() -> Self {
         TempFactory {
             temps_used: 0,

@@ -1,13 +1,5 @@
 
 # Current Status
-- [ ] parsing large numbers is problematic, specifically `INT_MIN`, since the parser recognizes the `2147483648` as a token,
-      and not the minus sign, leading to an integer overflow.
-      Moreover, `gcc` actually handles basic arithmetic even if it overflows, such as `2147483648 - 1` without causing an overflow.
-      As far as I can tell, the way they do that is by implicitly considering all integer literals as `int128_t`, and any integer literal
-      outside that range gets truncated.
-      I think that's probably the best approach, but I'll only use `int64_t` for ease of use, since I don't think Rust has builtin
-      128 bit integers.
-      Additionally, during static semantics I'll want to check that all the integer literals fit in 32 bits.
 
 # Global
 - [x] pretty print functionality
@@ -22,9 +14,17 @@
 - [x] Privatize the generic, so that the type is only exposed as a DFA.
 
 ### Tokenizing
-- [ ] Line and column numbers are incorrect, they don't account for whitespace
-- [>] Rework: read character by character, create whitespace token and just don't put those token in the token stream
+- [x] Line and column numbers are incorrect, they don't account for whitespace
+- [x] Rework: read character by character, create whitespace token and just don't put those token in the token stream
     - should fix the line/column number problem
+- [x] parsing large numbers is problematic, specifically `INT_MIN`, since the parser recognizes the `2147483648` as a token,
+      and not the minus sign, leading to an integer overflow.
+      Moreover, `gcc` actually handles basic arithmetic even if it overflows, such as `2147483648 - 1` without causing an overflow.
+      As far as I can tell, the way they do that is by implicitly considering all integer literals as `int128_t`, and any integer literal
+      outside that range gets truncated.
+      I think that's probably the best approach, but I'll only use `int64_t` for ease of use, since I don't think Rust has builtin
+      128 bit integers.
+      Additionally, during static semantics I'll want to check that all the integer literals fit in 32 bits.
 
 ## LALRPOP
 - [x] enable comments
@@ -43,6 +43,9 @@
 - [x] create `elab_ast` types which have scope information
 - [x] write `translate` function to convert `ast` to `elab_ast`
     - [x] elaborate `for` loops into equivalent `while` loops (with proper scoping)
+- [ ] add a Heap space recursion structure (see [the regex-syntax crate](https://www.reddit.com/r/rust/comments/wwhg35/comment/illc6jn/))
+    - [ ] currently the basic function call recursion overflows the stack for programs with many variable declarations,
+          and probably very large expressions as well
 
 # Static Semantics
 
@@ -86,7 +89,8 @@
 
 # IR Translation
 - [x] separate between commands (impure) and expressions (pure)
-- [ ] decide whether to split into basic blocks now, or wait for a future iteration (L3?)
+- [>] decide whether to split into basic blocks now, or wait for a future iteration (L3?)
+    - [x] for now, ignore the basic blocks, but revisit this when doing SSA conversion
 - [>] tests
     - [ ] TODO
 
