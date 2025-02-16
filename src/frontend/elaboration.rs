@@ -304,66 +304,62 @@ fn elaborate_stmt<'input>(
     }
 }
 
+/// This function needs to be written to avoid recursion wherever possible, since input
+/// functions with many declarations will require potentially more stack space than is
+/// available, using a recursive approach.
 fn elaborate_stmts<'input>(
     stmts: &[ast::Stmt<'input>],
 ) -> Result<elab_ast::Stmt<'input>, ()> {
-    let (first, elab_rest) = match stmts.split_first() {
-        Some((first, rest)) => (first, elaborate_stmts(rest)?),
-        None => return Ok(elab_ast::Stmt::Nop),
-    };
-
-    if let ast::Stmt::Declare(name, t) = first {
-        return Ok(elab_ast::Stmt::Declare(
-            name,
-            *t,
-            Box::new(elab_rest),
-        ));
+    let mut elab_stmt = elab_ast::Stmt::Nop;
+    for stmt in stmts.iter().rev() {
+        elab_stmt = match stmt {
+            ast::Stmt::Declare(name, t) => {
+                elab_ast::Stmt::Declare(name, *t, Box::new(elab_stmt))
+            }
+            ast::Stmt::DeclareAssign(name, t, exp) => elab_ast::Stmt::Declare(
+                name,
+                *t,
+                Box::new(elab_ast::Stmt::Seq(VecDeque::from(vec![
+                    elab_ast::Stmt::Assign(
+                        elab_ast::Lvalue::Ident(name),
+                        elaborate_exp(exp)?,
+                    ),
+                    elab_stmt,
+                ]))),
+            ),
+            ast::Stmt::Block(b) => match (elab_stmt, elaborate_stmts(b)?) {
+                (
+                    elab_ast::Stmt::Seq(mut seq1),
+                    elab_ast::Stmt::Seq(mut seq2),
+                ) => {
+                    seq1.append(&mut seq2);
+                    elab_ast::Stmt::Seq(seq1)
+                }
+                (elab_ast::Stmt::Seq(mut seq1), stmt) => {
+                    seq1.push_back(stmt);
+                    elab_ast::Stmt::Seq(seq1)
+                }
+                (stmt, elab_ast::Stmt::Seq(mut seq2)) => {
+                    seq2.push_front(stmt);
+                    elab_ast::Stmt::Seq(seq2)
+                }
+                (head, tail) => {
+                    let seq_rest = [head, tail].into();
+                    elab_ast::Stmt::Seq(seq_rest)
+                }
+            },
+            stmt => {
+                let mut seq_rest = match elab_stmt {
+                    elab_ast::Stmt::Seq(v) => v,
+                    elab_ast::Stmt::Nop => VecDeque::new(),
+                    s => VecDeque::from(vec![s]),
+                };
+                seq_rest.push_front(elaborate_stmt(stmt)?);
+                elab_ast::Stmt::Seq(seq_rest)
+            }
+        }
     }
-
-    if let ast::Stmt::Block(b) = first {
-        return match (elaborate_stmts(b)?, elab_rest) {
-            (elab_ast::Stmt::Seq(mut seq1), elab_ast::Stmt::Seq(mut seq2)) => {
-                seq1.append(&mut seq2);
-                Ok(elab_ast::Stmt::Seq(seq1))
-            }
-            (elab_ast::Stmt::Seq(mut seq1), stm) => {
-                seq1.push_back(stm);
-                Ok(elab_ast::Stmt::Seq(seq1))
-            }
-            (stm, elab_ast::Stmt::Seq(mut seq2)) => {
-                seq2.push_front(stm);
-                Ok(elab_ast::Stmt::Seq(seq2))
-            }
-            (head, tail) => {
-                let seq_rest = [head, tail].into();
-                Ok(elab_ast::Stmt::Seq(seq_rest))
-            }
-        };
-    }
-
-    let mut seq_rest = match elab_rest {
-        elab_ast::Stmt::Seq(v) => v,
-        elab_ast::Stmt::Nop => VecDeque::new(),
-        s => VecDeque::from(vec![s]),
-    };
-
-    if let ast::Stmt::DeclareAssign(name, t, exp) = first {
-        seq_rest.push_front(elab_ast::Stmt::Assign(
-            (*name).into(),
-            elaborate_exp(exp)?,
-        ));
-        return Ok(elab_ast::Stmt::Declare(
-            name,
-            *t,
-            Box::new(elab_ast::Stmt::Seq(seq_rest)),
-        ));
-    }
-
-    // note: by now we know that first is not a Declare, Block, or DeclareAssign
-    // since those branches all returned early
-    seq_rest.push_front(elaborate_stmt(first)?);
-
-    Ok(elab_ast::Stmt::Seq(seq_rest))
+    Ok(elab_stmt)
 }
 
 pub fn elaborate(program: ast::Program) -> Result<elab_ast::Program, ()> {
