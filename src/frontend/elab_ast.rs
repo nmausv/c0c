@@ -63,10 +63,10 @@ impl<'input> std::fmt::Display for Stmt<'input> {
             Self::Nop => write!(f, "nop;"),
             Self::Return(exp) => write!(f, "return {exp};"),
             Self::Seq(v) => {
-                write!(f, "{{")?;
+                writeln!(f, "{{start seq")?;
                 let _ =
                     v.iter().map(|s| writeln!(f, "{s}")).collect::<Vec<_>>();
-                write!(f, "}}")
+                write!(f, " end seq}}")
             }
             Self::If {
                 cond,

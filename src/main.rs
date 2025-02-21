@@ -28,7 +28,7 @@ impl From<Target> for codegen::Target {
     fn from(value: Target) -> Self {
         match value {
             Target::asm => codegen::Target::AbstractAssembly,
-            Target::x86_64 => todo!("x86-64 not implemented yet"),
+            Target::x86_64 => codegen::Target::x86_64,
             Target::ARM => codegen::Target::ARM,
             Target::LLVM => codegen::Target::LLVM,
         }
@@ -109,6 +109,8 @@ fn main() {
     println!("cli output: {:?}", cli.output);
     println!("cli target: {:?}", cli.target);
 
+    // bellsprout-return02-l2.l1
+
     let program = match read_to_string(&cli.input) {
         Ok(s) => s,
         Err(e) => {
@@ -145,7 +147,7 @@ mod tests {
                 Some(TestResult::Return(
                     line.strip_prefix("//test return ")?
                         .parse::<i64>()
-                        .unwrap(),
+                        .expect("test files should start with proper expected return values"),
                 ))
             } else if line.starts_with("//test div-by-zero") {
                 Some(TestResult::DivZero)
@@ -188,7 +190,7 @@ mod tests {
                     );
                     dbg!(&output);
                     let _ = output.unwrap();
-                    panic!()
+                    unreachable!();
                 }
 
                 eprintln!("passed");

@@ -3,6 +3,7 @@ pub enum Target {
     AbstractAssembly,
     ARM,
     LLVM,
+    x86_64
 }
 
 mod abstract_assembly;
@@ -27,5 +28,6 @@ pub fn codegen(
         }
         Target::ARM => todo!(),
         Target::LLVM => todo!(),
+        Target::x86_64 => todo!(),
     }
 }

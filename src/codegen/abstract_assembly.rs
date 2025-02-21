@@ -282,7 +282,9 @@ mod abs_asm_tests {
                 return Ok(Some(
                     *state
                         .get(&Operand::Register(String::from("r_ret")))
-                        .unwrap(),
+                        .expect(
+                            "program state should have the given value mapped",
+                        ),
                 ))
             }
             _ => todo!("abstract assembly simulation"),

@@ -70,7 +70,7 @@ fn elaborate_exp<'input>(
         }
         ast::Exp::BinOp(e1, binop, e2) => elaborate_binop(e1, binop, e2),
         // extra handling for negative literals
-        ast::Exp::UnOp(op, exp) => match (op, &**exp) {
+        ast::Exp::UnOp(op, exp) => match (op, exp.as_ref()) {
             (ast::UnOp::Negative, ast::Exp::Num(ast::Num::DecNum(n))) => {
                 // bounds check negative integer literals
                 if i128::from(i32::MIN) <= -(*n)
@@ -217,7 +217,7 @@ fn elaborate_stmt<'input>(
 
             // elaborate the step and put it after the body
             if let Some(step) = step {
-                new_body = match (&**step, elab_body) {
+                new_body = match (step.as_ref(), elab_body) {
                     (ast::Stmt::Declare(_, _), _) => {
                         // panic!("step cannot be declaration in for loop")
                         return Err(());
@@ -239,7 +239,7 @@ fn elaborate_stmt<'input>(
             }
 
             if let Some(init) = init {
-                match &**init {
+                match init.as_ref() {
                     ast::Stmt::Declare(name, t) => Ok(elab_ast::Stmt::Declare(
                         name,
                         *t,
