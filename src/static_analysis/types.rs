@@ -5,28 +5,28 @@ use crate::frontend::elab_ast::{Exp, Lvalue, OpType, Program, Stmt, Type};
 type TypeMap<'input> = HashMap<&'input str, Type>;
 
 impl Exp<'_> {
-    fn synthesize(&self, types: &TypeMap) -> Option<Type> {
+    fn synthesize(&self, types: &TypeMap) -> Result<Type, ()> {
         match self {
-            Exp::Num(_) => Some(Type::Int),
-            Exp::True => Some(Type::Bool),
-            Exp::False => Some(Type::Bool),
-            Exp::Lvalue(Lvalue::Ident(x)) => types.get(x).copied(),
+            Exp::Num(_) => Ok(Type::Int),
+            Exp::True => Ok(Type::Bool),
+            Exp::False => Ok(Type::Bool),
+            Exp::Lvalue(Lvalue::Ident(x)) => types.get(x).copied().ok_or(()),
             Exp::PureBinop(e1, eq, e2)
                 if eq.signature() == OpType::Equality =>
             {
                 if e1.synthesize(types)? == e2.synthesize(types)? {
-                    Some(Type::Bool)
+                    Ok(Type::Bool)
                 } else {
-                    None
+                    Err(())
                 }
             }
             Exp::PureBinop(e1, op, e2) if op.signature() == OpType::Logical => {
                 if e1.synthesize(types)? == Type::Bool
                     && e2.synthesize(types)? == Type::Bool
                 {
-                    Some(Type::Bool)
+                    Ok(Type::Bool)
                 } else {
-                    None
+                    Err(())
                 }
             }
             Exp::PureBinop(e1, op, e2)
@@ -35,9 +35,9 @@ impl Exp<'_> {
                 if e1.synthesize(types)? == Type::Int
                     && e2.synthesize(types)? == Type::Int
                 {
-                    Some(Type::Bool)
+                    Ok(Type::Bool)
                 } else {
-                    None
+                    Err(())
                 }
             }
             Exp::PureBinop(e1, op, e2)
@@ -46,32 +46,32 @@ impl Exp<'_> {
                 if e1.synthesize(types)? == Type::Int
                     && e2.synthesize(types)? == Type::Int
                 {
-                    Some(Type::Int)
+                    Ok(Type::Int)
                 } else {
-                    None
+                    Err(())
                 }
             }
             Exp::ImpureBinop(e1, _, e2) => {
                 if e1.synthesize(types)? == Type::Int
                     && e2.synthesize(types)? == Type::Int
                 {
-                    Some(Type::Int)
+                    Ok(Type::Int)
                 } else {
-                    None
+                    Err(())
                 }
             }
             Exp::UnOp(op, e) if op.signature() == OpType::Logical => {
                 if e.synthesize(types)? == Type::Bool {
-                    Some(Type::Bool)
+                    Ok(Type::Bool)
                 } else {
-                    None
+                    Err(())
                 }
             }
             Exp::UnOp(op, e) if op.signature() == OpType::Arithmetic => {
                 if e.synthesize(types)? == Type::Int {
-                    Some(Type::Int)
+                    Ok(Type::Int)
                 } else {
-                    None
+                    Err(())
                 }
             }
             Exp::Ternary {
@@ -81,15 +81,15 @@ impl Exp<'_> {
             } => {
                 let cond_type = cond.synthesize(types)?;
                 if cond_type != Type::Bool {
-                    return None;
+                    return Err(());
                 }
 
                 let branch_type = exp_true.synthesize(types)?;
 
                 if exp_false.synthesize(types)? == branch_type {
-                    Some(branch_type)
+                    Ok(branch_type)
                 } else {
-                    None
+                    Err(())
                 }
             }
             exp => {
@@ -99,54 +99,63 @@ impl Exp<'_> {
     }
 }
 
-fn check_stmt<'input>(types: &mut TypeMap<'input>, s: &'input Stmt, t: Type) -> bool {
+fn check_stmt<'input>(
+    types: &mut TypeMap<'input>,
+    s: &'input Stmt,
+    t: Type,
+) -> Result<(), ()> {
     match s {
-        Stmt::Return(e) => e.synthesize(types) == Some(t),
+        Stmt::Return(e) => match e.synthesize(types) == Ok(t) {
+            true => Ok(()),
+            false => Err(()),
+        },
         Stmt::Assign(Lvalue::Ident(var), e) => {
             let exp_type = e.synthesize(types);
             let var_type = types.get(var);
 
             match (exp_type, var_type) {
-                (Some(t1), Some(t2)) => t1 == *t2,
-                _ => false,
+                (Ok(t1), Some(t2)) if t1 == *t2 => Ok(()),
+                _ => Err(()),
             }
         }
-        Stmt::Seq(block) => block.iter().all(|s| check_stmt(types, s, t)),
-        Stmt::Nop => true,
+        Stmt::Seq(block) => {
+            block.iter().try_for_each(|s| check_stmt(types, s, t))
+        }
+        Stmt::Nop => Ok(()),
         Stmt::Declare(var, var_type, scope) => {
             // disallow shadowing
             if types.contains_key(var) {
-                return false;
+                return Err(());
             }
             types.insert(var, *var_type);
             let result = check_stmt(types, scope, t);
             types.remove(var);
             result
         }
-        Stmt::Exp(e) => e.synthesize(types).is_some(),
+        Stmt::Exp(e) => e.synthesize(types).map(|_| ()),
         Stmt::If {
             cond,
             stmt_true,
             stmt_false,
         } => {
-            if cond.synthesize(types) == Some(Type::Bool) {
+            if cond.synthesize(types) == Ok(Type::Bool) {
                 check_stmt(types, stmt_true, t)
-                    && check_stmt(types, stmt_false, t)
+                    .and(check_stmt(types, stmt_false, t))
             } else {
-                false
+                Err(())
             }
         }
         Stmt::While { cond, body } => {
-            if cond.synthesize(types) == Some(Type::Bool) {
+            if cond.synthesize(types) == Ok(Type::Bool) {
                 check_stmt(types, body, t)
             } else {
-                false
+                Err(())
             }
         }
     }
 }
 
-pub fn typecheck(s: &Program) -> bool {
+pub fn typecheck(s: &Program) -> Result<(), ()> {
     let mut types = HashMap::new();
     check_stmt(&mut types, s.as_ref(), Type::Int)
 }

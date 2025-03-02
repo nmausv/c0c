@@ -20,6 +20,10 @@ fn return_check_statement(s: &Stmt) -> bool {
     }
 }
 
-pub fn return_check(program: &Program) -> bool {
-    return_check_statement(program.as_ref())
+pub fn return_check(program: &Program) -> Result<(), ()> {
+    if return_check_statement(program.as_ref()) {
+        Ok(())
+    } else {
+        Err(())
+    }
 }

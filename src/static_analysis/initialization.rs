@@ -177,7 +177,7 @@ struct Frame<'input, 'frame> {
     kind: FrameKind<'input>,
 }
 
-fn make_checked_frame<'input, 'parent, 'frame>(
+fn make_frame<'input, 'parent, 'frame>(
     s: &'parent Stmt<'input>,
     env: &StmtEnv<'input>,
 ) -> Frame<'frame, 'input>
@@ -228,15 +228,30 @@ where
     }
 }
 
-/// iterative implementation of the statement initialization checker
-fn foo(elab_program: &Program) -> Result<(), ()> {
+/// Checks that all variables are initialized before being used.
+/// A `return` initializes all variables currently in scope, so programs like
+/// ```c
+/// int main() {
+///   int x; // (1)
+///   return 0;
+///   int y = x + 1; // (2)
+/// }
+/// ```
+/// are valid, even though `x` is used before being initialized at (2).
+/// Note that variables not in scope are not initialized, so removing line (1) is not valid.
+///
+/// This function used to be recursive, but for very long programs, that could overflow
+/// the stack.
+/// Now this function uses heap space to keep track of `Frame`s, and manually recurses to
+/// save on stack space.
+pub fn initialization_check(elab_program: &Program) -> Result<(), ()> {
     let mut env = StmtEnv {
         initialized: HashSet::new(),
         inscope: HashMap::new(),
     };
     let mut stack: Vec<Frame> = Vec::new();
 
-    stack.push(make_checked_frame(elab_program.as_ref(), &env));
+    stack.push(make_frame(elab_program.as_ref(), &env));
 
     while let Some(mut frame) = stack.pop() {
         match frame.kind {
@@ -252,7 +267,7 @@ fn foo(elab_program: &Program) -> Result<(), ()> {
                     // push modified parent frame
                     stack.push(frame);
                     // push child frame
-                    let child_frame = make_checked_frame(child_stmt, &env);
+                    let child_frame = make_frame(child_stmt, &env);
                     stack.push(child_frame);
                 }
             }
@@ -275,7 +290,7 @@ fn foo(elab_program: &Program) -> Result<(), ()> {
                         stack.push(frame);
 
                         // push child
-                        let scope_frame = make_checked_frame(scope, &env);
+                        let scope_frame = make_frame(scope, &env);
                         stack.push(scope_frame);
                     }
                     InProgress => {
@@ -313,7 +328,7 @@ fn foo(elab_program: &Program) -> Result<(), ()> {
                             if_env: InProgress,
                             else_env: New,
                         };
-                        let if_frame = make_checked_frame(stmt_true, &env);
+                        let if_frame = make_frame(stmt_true, &env);
 
                         // push modified parent
                         stack.push(frame);
@@ -331,7 +346,7 @@ fn foo(elab_program: &Program) -> Result<(), ()> {
                         };
 
                         // make child frame
-                        let else_frame = make_checked_frame(stmt_false, &env);
+                        let else_frame = make_frame(stmt_false, &env);
 
                         // push modified parent
                         stack.push(frame);
@@ -366,7 +381,7 @@ fn foo(elab_program: &Program) -> Result<(), ()> {
                         };
 
                         // push child
-                        stack.push(make_checked_frame(body, &env));
+                        stack.push(make_frame(body, &env));
                     }
                     InProgress => unreachable!(),
                     Done(()) => {
@@ -415,31 +430,8 @@ fn foo(elab_program: &Program) -> Result<(), ()> {
     Ok(())
 }
 
-/// Checks that all variables are initialized before being used.
-/// A `return` initializes all variables currently in scope, so programs like
-/// ```c
-/// int main() {
-///   int x; // (1)
-///   return 0;
-///   int y = x + 1; // (2)
-/// }
-/// ```
-/// are valid, even though `x` is used before being initialized at (2).
-/// Note that variables not in scope are not initialized, so removing line (1) is not valid.
-pub fn initialization_check(elab_program: &Program) -> bool {
-    /*
-    let env = StmtEnv {
-        inscope: HashMap::new(),
-        initialized: HashSet::new(),
-    };
-
-    stmt_initializes(env, elab_program.as_ref()).is_some()
-    */
-    foo(elab_program).is_ok()
-}
-
 #[cfg(test)]
-mod init_tests {
+mod tests {
     use std::collections::VecDeque;
 
     use super::*;
@@ -448,7 +440,7 @@ mod init_tests {
     #[test]
     fn empty_main() {
         let program: Program = Stmt::Return(Exp::Num(0)).into();
-        assert!(initialization_check(&program));
+        assert!(initialization_check(&program).is_ok());
     }
 
     #[test]
@@ -456,7 +448,7 @@ mod init_tests {
         let program: Program =
             Stmt::Declare("x", Type::Int, Box::new(Stmt::Return(Exp::Num(0))))
                 .into();
-        assert!(initialization_check(&program));
+        assert!(initialization_check(&program).is_ok());
     }
 
     #[test]
@@ -466,7 +458,7 @@ mod init_tests {
             Stmt::Return(Exp::Num(0)),
         ]))
         .into();
-        assert!(!initialization_check(&program));
+        assert!(initialization_check(&program).is_err());
     }
 
     #[test]
@@ -476,7 +468,7 @@ mod init_tests {
             Stmt::Assign("x".into(), Exp::Lvalue("x".into())),
         ]))
         .into();
-        assert!(!initialization_check(&program));
+        assert!(initialization_check(&program).is_err());
     }
 
     #[test]
@@ -490,11 +482,11 @@ mod init_tests {
             ]))),
         )
         .into();
-        assert!(initialization_check(&program));
+        assert!(initialization_check(&program).is_ok());
     }
 
     #[test]
-    fn use_with_declare_after_return() {
+    fn declare_after_return() {
         let program: Program = Stmt::Seq(VecDeque::from(vec![
             Stmt::Return(Exp::Num(0)),
             Stmt::Declare(
@@ -507,7 +499,7 @@ mod init_tests {
             ),
         ]))
         .into();
-        assert!(initialization_check(&program));
+        assert!(initialization_check(&program).is_ok());
     }
 
     #[test]
@@ -528,7 +520,7 @@ mod init_tests {
             ]))),
         )
         .into();
-        assert!(!initialization_check(&program_noscope));
+        assert!(initialization_check(&program_noscope).is_err());
 
         // VALID
         // int main() {{int x = 0;} int x = 1; x = x;}
@@ -548,6 +540,6 @@ mod init_tests {
             ),
         ]))
         .into();
-        assert!(initialization_check(&program_scope));
+        assert!(initialization_check(&program_scope).is_ok());
     }
 }
