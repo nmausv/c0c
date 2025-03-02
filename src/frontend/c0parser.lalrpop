@@ -150,7 +150,7 @@ Num: Num = {
     Num::DecNum(i128::from_str_radix(<>, 10).expect("integer literal too large"))
   },
   HexNum => {
-    Num::HexNum(i128::from_str_radix(<>.strip_prefix("0x").unwrap(), 16).expect("hex literal too large"))
+    Num::HexNum(i128::from_str_radix(&<>[2..], 16).expect("hex literal too large"))
   },
 };
 

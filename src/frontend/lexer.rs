@@ -424,7 +424,7 @@ impl<'input> Lexer<'input> {
 
     /// Internal function to match a string against the lexemes
     ///
-    /// Returns None if the raw string doesn't match any of the lexemes, or Some
+    /// Returns `None` if the raw string doesn't match any of the lexemes, or Some
     /// token it matched along with the number of consumed characters if the raw
     /// string matched a lexeme.
     ///
@@ -605,7 +605,8 @@ impl<'input> Iterator for Lexer<'input> {
                 }));
             }
 
-            let (token, token_location) = opt.unwrap();
+            let (token, token_location) =
+                opt.expect("option is some by if guard above");
 
             match token.token_type {
                 TokenType::WHITESPACE => {}

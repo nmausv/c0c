@@ -100,6 +100,22 @@ fn elaborate_exp<'input>(
     }
 }
 
+fn extract_binop(asnop: ast::AsnOp) -> Result<elab_ast::BinOp, ()> {
+    match asnop {
+        ast::AsnOp::Eq => Err(()),
+        ast::AsnOp::PlusEq => Ok(elab_ast::PureBinOp::Plus.into()),
+        ast::AsnOp::MinusEq => Ok(elab_ast::PureBinOp::Minus.into()),
+        ast::AsnOp::TimesEq => Ok(elab_ast::PureBinOp::Times.into()),
+        ast::AsnOp::DivEq => Ok(elab_ast::ImpureBinOp::Divide.into()),
+        ast::AsnOp::ModEq => Ok(elab_ast::ImpureBinOp::Modulo.into()),
+        ast::AsnOp::AndEq => Ok(elab_ast::PureBinOp::BitAnd.into()),
+        ast::AsnOp::XorEq => Ok(elab_ast::PureBinOp::BitXor.into()),
+        ast::AsnOp::OrEq => Ok(elab_ast::PureBinOp::BitOr.into()),
+        ast::AsnOp::ShlEq => Ok(elab_ast::ImpureBinOp::Shl.into()),
+        ast::AsnOp::ShrEq => Ok(elab_ast::ImpureBinOp::Shr.into()),
+    }
+}
+
 /// Elaborates a single statement, but since `Declare` and `DeclareAssign`
 /// have unique interactions with subsequent statements, these statements
 /// cannot be evaluated individually using this function.
@@ -122,58 +138,19 @@ fn elaborate_stmt<'input>(
         ast::Stmt::Block(b) => elaborate_stmts(b),
         ast::Stmt::Assign(ast::Lvalue::Ident(name), asnop, exp) => {
             let lval: elab_ast::Lvalue = (*name).into();
-            let elab_exp = match asnop {
-                ast::AsnOp::Eq => elaborate_exp(exp)?,
-                ast::AsnOp::PlusEq => elab_ast::Exp::PureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(lval.clone())),
-                    elab_ast::PureBinOp::Plus,
+
+            let elab_exp = match extract_binop(*asnop) {
+                Ok(elab_ast::BinOp::Pure(op)) => elab_ast::Exp::PureBinop(
+                    Box::new(elab_ast::Exp::Lvalue(lval)),
+                    op,
                     Box::new(elaborate_exp(exp)?),
                 ),
-                ast::AsnOp::MinusEq => elab_ast::Exp::PureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(lval.clone())),
-                    elab_ast::PureBinOp::Minus,
+                Ok(elab_ast::BinOp::Impure(op)) => elab_ast::Exp::ImpureBinop(
+                    Box::new(elab_ast::Exp::Lvalue(lval)),
+                    op,
                     Box::new(elaborate_exp(exp)?),
                 ),
-                ast::AsnOp::TimesEq => elab_ast::Exp::PureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(lval.clone())),
-                    elab_ast::PureBinOp::Times,
-                    Box::new(elaborate_exp(exp)?),
-                ),
-                ast::AsnOp::DivEq => elab_ast::Exp::ImpureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(lval.clone())),
-                    elab_ast::ImpureBinOp::Divide,
-                    Box::new(elaborate_exp(exp)?),
-                ),
-                ast::AsnOp::ModEq => elab_ast::Exp::ImpureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(lval.clone())),
-                    elab_ast::ImpureBinOp::Modulo,
-                    Box::new(elaborate_exp(exp)?),
-                ),
-                ast::AsnOp::AndEq => elab_ast::Exp::PureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(lval.clone())),
-                    elab_ast::PureBinOp::BitAnd,
-                    Box::new(elaborate_exp(exp)?),
-                ),
-                ast::AsnOp::XorEq => elab_ast::Exp::PureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(lval.clone())),
-                    elab_ast::PureBinOp::BitXor,
-                    Box::new(elaborate_exp(exp)?),
-                ),
-                ast::AsnOp::OrEq => elab_ast::Exp::PureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(lval.clone())),
-                    elab_ast::PureBinOp::BitOr,
-                    Box::new(elaborate_exp(exp)?),
-                ),
-                ast::AsnOp::ShlEq => elab_ast::Exp::ImpureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(lval.clone())),
-                    elab_ast::ImpureBinOp::Shl,
-                    Box::new(elaborate_exp(exp)?),
-                ),
-                ast::AsnOp::ShrEq => elab_ast::Exp::ImpureBinop(
-                    Box::new(elab_ast::Exp::Lvalue(lval.clone())),
-                    elab_ast::ImpureBinOp::Shr,
-                    Box::new(elaborate_exp(exp)?),
-                ),
+                Err(()) => elaborate_exp(exp)?,
             };
             Ok(elab_ast::Stmt::Assign(lval, elab_exp))
         }
@@ -279,10 +256,11 @@ fn elaborate_stmt<'input>(
                     )),
                 }
             } else {
-                match step {
-                    Some(_) => todo!(),
-                    None => todo!(),
-                }
+                // no init
+                Ok(elab_ast::Stmt::While {
+                    cond: elab_cond,
+                    body: Box::new(new_body),
+                })
             }
         }
         ast::Stmt::If {
@@ -304,14 +282,18 @@ fn elaborate_stmt<'input>(
     }
 }
 
-/// This function needs to be written to avoid recursion wherever possible, since input
-/// functions with many declarations will require potentially more stack space than is
-/// available, using a recursive approach.
+/// Elaborate a slice of basic statements into a single elaborated statement,
+/// rewriting and removing "syntactic sugar".
+///
+/// This function needs to be written to avoid recursion, since input code
+/// can require an unbounded number of recursive calls.
 fn elaborate_stmts<'input>(
     stmts: &[ast::Stmt<'input>],
 ) -> Result<elab_ast::Stmt<'input>, ()> {
     let mut elab_stmt = elab_ast::Stmt::Nop;
     for stmt in stmts.iter().rev() {
+        // only the statements that can't be appended to a sequence need special handling here, otherwise we can use
+        // `elaborate_stmt`
         elab_stmt = match stmt {
             ast::Stmt::Declare(name, t) => {
                 elab_ast::Stmt::Declare(name, *t, Box::new(elab_stmt))
@@ -327,6 +309,15 @@ fn elaborate_stmts<'input>(
                     elab_stmt,
                 ]))),
             ),
+            // this recursive call is not ideal, but removing it is difficult
+            // since it means we need to keep a whole stack of elaborated statements in progress,
+            // and not just the current right hand side.
+            //
+            // we also want to flatten out sequences, to avoid things like
+            // ```
+            // Seq(Seq(s1), Seq(s2))
+            // ```
+            // since scope information is stored via `Declare`.
             ast::Stmt::Block(b) => match (elab_stmt, elaborate_stmts(b)?) {
                 (
                     elab_ast::Stmt::Seq(mut seq1),

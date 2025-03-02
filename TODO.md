@@ -12,6 +12,15 @@
 ### Regex
 - [ ] Add better error handling for converting `DFA<RegExp>` to `DFA<Option<char>>`
 - [x] Privatize the generic, so that the type is only exposed as a DFA.
+- [ ] Optimize the regular expression engine:
+    - `cargo flamegraph` indicates that the vast majority of time is spent in `matches_against` and `eps_closure` in that,
+        while the rest of the compiler steps are barely a rounding error. As a result, I'd very much like to optimize this
+        so I can measure the performance of the rest of the compiler more effectively.
+    - [>] minimize the DFA
+        - relatively easy to implement, but I'm not convinced it will really do much
+    - [ ] construct DFA via Brzozowski derivatives
+        - seems both interesting and much faster than the current algorithm
+        - after research, it seems like the DFAs constructed this way might still need minimization
 
 ### Tokenizing
 - [x] Line and column numbers are incorrect, they don't account for whitespace
@@ -43,11 +52,16 @@
 - [x] create `elab_ast` types which have scope information
 - [x] write `translate` function to convert `ast` to `elab_ast`
     - [x] elaborate `for` loops into equivalent `while` loops (with proper scoping)
-- [ ] add a Heap space recursion structure (see [the regex-syntax crate](https://www.reddit.com/r/rust/comments/wwhg35/comment/illc6jn/))
-    - [ ] currently the basic function call recursion overflows the stack for programs with many variable declarations,
+- [x] add a Heap space recursion structure (see [the regex-syntax crate](https://www.reddit.com/r/rust/comments/wwhg35/comment/illc6jn/))
+    - [x] currently the basic function call recursion overflows the stack for programs with many variable declarations,
           and probably very large expressions as well
 
 # Static Semantics
+
+- [>] convert all recursive static semantics to iterative solutions
+    - [x] initialization check
+    - [ ] return check
+    - [ ] type check
 
 ## Initialization
 - [x] ensure variables are defined before being used, and `return`s define all and only variables currently in scope
@@ -68,7 +82,7 @@
     }
     ```
     is valid and returns 0.
-    - further update: distinguishing the above two cases is actually not possible with the elaboration procedure I'm using, and I can't really tell how to extend it to work. moreover, the lecture notes actually specify that we can't declare variables twice, so *neither* of the above two programs are valid, while
+    - further update: distinguishing the above two cases is actually not possible with the elaboration procedure I'm using, and I can't really tell how to extend it to work. Moreover, the lecture notes actually specify that we can't declare variables twice, so *neither* of the above two programs are valid, while
     ```c
     int main() {
         { int x = 0; }

@@ -71,22 +71,22 @@ impl RegExp {
 
 /// The DFA states are encoded as usizes for easy indexing into `Vec`
 type DFAState = usize;
+
 /// The Nondeterministic Finite Automaton type
 ///
 /// The alphabet is implicitly the set of all `char`s, and the state set is a set of `usize`s.
 /// The initial state will always be 0.
 ///
 /// The type parameter `T` indicates the keys used for the transition functions.
-/// After the initial processing, `T` will always be `Option<char>`.
 #[derive(Debug, Clone)]
 struct InvalidDFA<T> {
     /// Set of states = usizes
     ///
     /// List of states
     ///
-    /// For a given state `s`, `states[s] = None` if the state is not defined for this DFA.
-    /// Moreover, `states[s] = Some(true)` if and only if the state `s` is an accepting state.
-    states: Vec<Option<bool>>,
+    /// For a given state `s`, `states[s] = true` if and only if the state `s` is an accepting state,
+    /// so a non accepting state `s` will satisfy `state[s] = false`
+    states: Vec<bool>,
     /// Transition functions
     ///
     /// Indexed by current state and the parameter type T.
@@ -173,9 +173,9 @@ impl DFA {
         };
         // initialize with initial -> final via pat
         // initial state at 0
-        nfa.states.push(Some(false));
+        nfa.states.push(false);
         // final state at 1
-        nfa.states.push(Some(true));
+        nfa.states.push(true);
         // transition
         nfa.transitions.insert((0, pat), HashSet::from([1]));
 
@@ -199,7 +199,7 @@ impl DFA {
                 RegExp::Split(r, s) => {
                     // make new intermediate state
                     let mid = nfa.states.len();
-                    nfa.states.push(Some(false));
+                    nfa.states.push(false);
 
                     nfa.insert_transition(start, r, mid);
                     nfa.insert_transition(mid, s, end);
@@ -214,9 +214,9 @@ impl DFA {
                 RegExp::Star(r) => {
                     // need two intermediate states
                     let q1 = nfa.states.len();
-                    nfa.states.push(Some(false));
+                    nfa.states.push(false);
                     let p1 = nfa.states.len();
-                    nfa.states.push(Some(false));
+                    nfa.states.push(false);
 
                     nfa.insert_transition(start, &RegExp::Empty, end);
                     nfa.insert_transition(start, &RegExp::Empty, q1);
@@ -259,7 +259,7 @@ impl DFA {
             // get a state
             let &state = pre_states.iter().next().unwrap();
             // if anything accepts, make accepting true, don't overwrite false
-            accepting |= internal.states[state] == Some(true);
+            accepting |= internal.states[state];
             // remove the state from pre_states
             pre_states.remove(&state);
             // get empty transition end states
@@ -272,7 +272,7 @@ impl DFA {
 
                     // if post_state is accepting, mark accepting
                     // optimization: skip check if accepting already marked
-                    if !accepting && internal.states[end_state] == Some(true) {
+                    if !accepting && internal.states[end_state] {
                         accepting = true;
                     }
                 }
@@ -338,7 +338,7 @@ impl DFA {
 }
 
 #[cfg(test)]
-mod dfa_tests {
+mod tests {
     use super::{RegExp, DFA};
 
     #[test]

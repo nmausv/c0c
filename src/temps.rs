@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 /// `Temp`s are meant to be created once,
 /// and possibly copied many times,
 /// but specifically they
@@ -13,17 +15,17 @@
 /// but they should not be thought of as
 /// modifiable like `String`.
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct Temp(String);
+pub struct Temp(Rc<str>);
 
 impl From<String> for Temp {
     fn from(value: String) -> Self {
-        Self(value)
+        Self(value.into())
     }
 }
 
 impl From<Temp> for String {
     fn from(value: Temp) -> Self {
-        value.0
+        value.0.to_string()
     }
 }
 
@@ -48,7 +50,7 @@ impl std::fmt::Display for Temp {
 /// but they should not be thought of as
 /// modifiable like `String`.
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Label(String);
+pub struct Label(Rc<str>);
 
 impl std::fmt::Display for Label {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -71,11 +73,11 @@ impl TempFactory {
 
     pub fn make_temp(&mut self) -> Temp {
         self.temps_used += 1;
-        Temp(format!("t{}", self.temps_used))
+        Temp(format!("t{}", self.temps_used).into())
     }
 
     pub fn make_label(&mut self) -> Label {
         self.labels_used += 1;
-        Label(format!("l{}", self.labels_used))
+        Label(format!("l{}", self.labels_used).into())
     }
 }

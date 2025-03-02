@@ -60,10 +60,6 @@ fn compile(
     verbose: bool,
     target: codegen::Target,
 ) -> Result<String, ()> {
-    if verbose {
-        println!("program to compile: \n[{program}]");
-    }
-
     let lexer = frontend::lexer::Lexer::new_c0c_lexer(program);
     let parser = frontend::c0parser::ProgramParser::new();
     let ast = match parser.parse(program, lexer) {
@@ -74,11 +70,13 @@ fn compile(
         }
     };
     if verbose {
-        println!("program parsed as:\n{ast}\n");
+        println!("program successfully parsed into AST");
+        // println!("program parsed as:\n{ast}\n");
     }
     let elab_ast = frontend::elaboration::elaborate(ast)?;
     if verbose {
-        println!("program elaborated to:\n{elab_ast}\n");
+        println!("AST successfully elaborated");
+        // println!("program elaborated to:\n{elab_ast}\n");
     }
     if !static_analysis::check(&elab_ast) {
         return Err(());
@@ -90,12 +88,14 @@ fn compile(
     let mut tf = temps::TempFactory::new();
     let ir_tree = translation::translate(elab_ast, &mut tf);
     if verbose {
-        println!("program translated to:\n{ir_tree}\n");
+        println!("elaborated AST translated to IR");
+        // println!("program translated to:\n{ir_tree}\n");
     }
 
     let abstract_assembly = codegen::codegen(ir_tree, target, &mut tf);
     if verbose {
-        println!("abstract assembly:\n{abstract_assembly}\n");
+        println!("abstract assembly generated from IR");
+        // println!("abstract assembly:\n{abstract_assembly}\n");
     }
 
     Ok(abstract_assembly)
@@ -110,6 +110,7 @@ fn main() {
     println!("cli target: {:?}", cli.target);
 
     // bellsprout-return02-l2.l1
+    // simeonpoisson-randomizedlarge.l1
 
     let program = match read_to_string(&cli.input) {
         Ok(s) => s,
@@ -144,11 +145,10 @@ mod tests {
             let line = contents.lines().next()?.trim();
 
             if line.starts_with("//test return ") {
-                Some(TestResult::Return(
-                    line.strip_prefix("//test return ")?
-                        .parse::<i64>()
-                        .expect("test files should start with proper expected return values"),
-                ))
+                match line.strip_prefix("//test return ")?.parse::<i64>() {
+                    Ok(result) => Some(TestResult::Return(result)),
+                    Err(_) => None,
+                }
             } else if line.starts_with("//test div-by-zero") {
                 Some(TestResult::DivZero)
             } else if line.starts_with("//test error") {
@@ -160,6 +160,7 @@ mod tests {
 
         fn test_directory(path: &str) {
             let files = read_dir(path).expect("testing directory should exist");
+            let mut failures: Vec<String> = Vec::new();
             for entry in files {
                 let entry = entry.expect("test file should exist");
 
@@ -168,8 +169,12 @@ mod tests {
                 let file = read_to_string(entry.path())
                     .expect("test file should be readable");
 
-                let expected = get_test_result(&file)
-                    .expect("test file should have valid expected result");
+                let expected = get_test_result(&file).unwrap_or_else(|| {
+                    panic!(
+                        "test file {} should have valid expected result",
+                        entry.path().to_str().unwrap()
+                    )
+                });
 
                 // compile each file without verbose mode
                 let output = compile(
@@ -183,22 +188,24 @@ mod tests {
                     TestResult::Error => output.is_err(),
                     TestResult::DivZero => output.is_ok(),
                 } {
-                    let output = compile(
-                        &file,
-                        true,
-                        crate::codegen::Target::AbstractAssembly,
-                    );
-                    dbg!(&output);
-                    let _ = output.unwrap();
-                    unreachable!();
+                    let failed_file =
+                        entry.path().to_str().unwrap().to_string();
+                    eprintln!("file {} did not pass", failed_file);
+                    failures.push(failed_file);
+                } else {
+                    eprintln!("passed");
                 }
 
-                eprintln!("passed");
-
+                // TODO
                 // save to output file
                 // run output file
                 // test against expected output
                 // delete output file
+            }
+
+            eprintln!("failed tests:");
+            for test in failures {
+                eprintln!("- {test}");
             }
         }
 

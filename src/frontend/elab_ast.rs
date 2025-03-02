@@ -127,7 +127,7 @@ impl<'input> std::fmt::Display for Exp<'input> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lvalue<'input> {
     Ident(&'input str),
 }
@@ -303,7 +303,8 @@ impl std::fmt::Display for PureBinOp {
 pub type UnOp = super::ast::UnOp;
 
 impl UnOp {
-    pub fn signature(self) -> OpType {
+    #[inline(always)]
+    pub const fn signature(self) -> OpType {
         match self {
             Self::Negative => OpType::Arithmetic,
             Self::LogNegate => OpType::Logical,
