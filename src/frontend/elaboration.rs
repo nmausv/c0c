@@ -355,7 +355,9 @@ fn elaborate_stmts<'input>(
 
 pub fn elaborate(program: ast::Program) -> Result<elab_ast::Program, ()> {
     // assert that main function is identified as main
-    assert!(program.name == "main");
-
-    elaborate_stmts(&program.body).map(|s| s.into())
+    if program.name != "main" {
+        Err(())
+    } else {
+        elaborate_stmts(&program.body).map(|s| s.into())
+    }
 }

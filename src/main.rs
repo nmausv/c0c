@@ -94,8 +94,8 @@ fn compile(
 
     let abstract_assembly = codegen::codegen(ir_tree, target, &mut tf);
     if verbose {
-        println!("abstract assembly generated from IR");
-        // println!("abstract assembly:\n{abstract_assembly}\n");
+        println!("final output generated from IR");
+        // println!("final output:\n{abstract_assembly}\n");
     }
 
     Ok(abstract_assembly)
@@ -108,9 +108,6 @@ fn main() {
     println!("cli input: {:?}", cli.input);
     println!("cli output: {:?}", cli.output);
     println!("cli target: {:?}", cli.target);
-
-    // bellsprout-return02-l2.l1
-    // simeonpoisson-randomizedlarge.l1
 
     let program = match read_to_string(&cli.input) {
         Ok(s) => s,
@@ -158,49 +155,56 @@ mod tests {
             }
         }
 
+        fn test_file(file: String, path: &str) -> bool {
+            let expected = get_test_result(&file).unwrap_or_else(|| {
+                panic!("test file {path} should have valid expected result")
+            });
+
+            // compile each file without verbose mode
+            let output =
+                compile(&file, false, crate::codegen::Target::AbstractAssembly);
+
+            if !match expected {
+                TestResult::Return(_) => output.is_ok(),
+                TestResult::Error => output.is_err(),
+                TestResult::DivZero => output.is_ok(),
+            } {
+                eprintln!("file {} did not pass", path);
+                return false;
+            } else {
+                eprintln!("passed");
+            }
+
+            // TODO
+            // save to output file
+            // run output file
+            // test against expected output
+            // delete output file
+
+            true
+        }
+
         fn test_directory(path: &str) {
             let files = read_dir(path).expect("testing directory should exist");
             let mut failures: Vec<String> = Vec::new();
             for entry in files {
                 let entry = entry.expect("test file should exist");
+                let path = entry.path();
+                let path_str = path.to_str().unwrap();
 
-                eprint!("testing {}...", entry.path().to_str().unwrap());
+                eprint!("testing {path_str}...");
 
-                let file = read_to_string(entry.path())
-                    .expect("test file should be readable");
+                let file = match read_to_string(entry.path()) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        failures.push(path_str.to_string());
+                        return;
+                    }
+                };
 
-                let expected = get_test_result(&file).unwrap_or_else(|| {
-                    panic!(
-                        "test file {} should have valid expected result",
-                        entry.path().to_str().unwrap()
-                    )
-                });
-
-                // compile each file without verbose mode
-                let output = compile(
-                    &file,
-                    false,
-                    crate::codegen::Target::AbstractAssembly,
-                );
-
-                if !match expected {
-                    TestResult::Return(_) => output.is_ok(),
-                    TestResult::Error => output.is_err(),
-                    TestResult::DivZero => output.is_ok(),
-                } {
-                    let failed_file =
-                        entry.path().to_str().unwrap().to_string();
-                    eprintln!("file {} did not pass", failed_file);
-                    failures.push(failed_file);
-                } else {
-                    eprintln!("passed");
+                if !test_file(file, path_str) {
+                    failures.push(path_str.to_string());
                 }
-
-                // TODO
-                // save to output file
-                // run output file
-                // test against expected output
-                // delete output file
             }
 
             eprintln!("failed tests:");
@@ -217,6 +221,18 @@ mod tests {
         #[test]
         fn large() {
             test_directory("tests/l1-large");
+        }
+
+        #[test]
+        fn wip() {
+            // bellsprout-return02-l2.l1
+            // simeonpoisson-randomizedlarge.l1
+            // maryammirzakhani-chinese.l1
+
+            let path = "tests/l1-large/maryammirzakhani-chinese.l1";
+            let file = read_to_string(path).unwrap();
+
+            assert!(test_file(file, path));
         }
     }
 }

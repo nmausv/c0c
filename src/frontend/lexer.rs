@@ -432,6 +432,8 @@ impl<'input> Lexer<'input> {
     /// chooses the token with the highest priority.
     fn match_all(&mut self) -> Option<(Token<'input>, Location)> {
         // stores vector of (match length, token, priority)
+
+        // note: this is slow as fuck, how to make faster?
         let match_iter = self
             .lexemes
             .iter()
@@ -535,22 +537,27 @@ impl<'input> Lexer<'input> {
 
         // skip characters until the first match
         let mut matched = smaller_lexer.match_all();
-        let input_chars: Vec<_> = self.input.chars().collect();
         while matched.is_none() {
             // out of characters to consume
             if smaller_lexer.consumed >= smaller_lexer.input.len() {
                 return None;
             }
-            // (preemptively) update location after skipping character
-            if input_chars[smaller_lexer.consumed] == '\n' {
-                smaller_lexer.location.line += 1;
-                smaller_lexer.location.column = 1;
+            if let Some((byte_offset, char)) =
+                self.input[smaller_lexer.consumed..].char_indices().next()
+            {
+                // (preemptively) update location after skipping character
+                if char == '\n' {
+                    smaller_lexer.location.line += 1;
+                    smaller_lexer.location.column = 1;
+                } else {
+                    smaller_lexer.location.column += 1;
+                }
+                // skip a character
+                smaller_lexer.consumed += byte_offset + char.len_utf8();
+                matched = smaller_lexer.match_all();
             } else {
-                smaller_lexer.location.column += 1;
+                return None;
             }
-            // skip a character
-            smaller_lexer.consumed += 1;
-            matched = smaller_lexer.match_all();
         }
 
         self.consumed = smaller_lexer.consumed;

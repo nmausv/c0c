@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Simple regular expression library for the c0c lexer
 ///
@@ -89,15 +89,10 @@ struct InvalidDFA<T> {
     states: Vec<bool>,
     /// Transition functions
     ///
-    /// Indexed by current state and the parameter type T.
-    /// Almost every function will require the type T = Option<char>,
-    /// but for building the DFA we use T = RegExp.
-    ///
-    /// The reason to use `HashSet<usize>` instead of `Vec<bool>` or similar is that we expect
-    /// that most end state lists to be relatively small, so using a `Vec<bool>` requires iterating
-    /// over all the states to find the "good" ones, where as the `HashSet<usize>` doesn't need to
-    /// iterate over every state.
-    transitions: HashMap<(DFAState, T), HashSet<DFAState>>,
+    /// Indexed by current state and the parameter type `T`.
+    /// Almost every function will require the type `T = Option<char>`,
+    /// but for building the DFA we use `T = RegExp`.
+    transitions: HashMap<(DFAState, T), Vec<DFAState>>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,9 +109,9 @@ impl<'a> InvalidDFA<&'a RegExp> {
         let r_entry = self.transitions.entry(r_key);
         r_entry
             .and_modify(|ends| {
-                ends.insert(end);
+                ends.push(end);
             })
-            .or_insert(HashSet::from([end]));
+            .or_insert(vec![end]);
     }
 
     /// Converts a `DFA<RegExp>` into an `DFA<Option<char>>`
@@ -177,7 +172,7 @@ impl DFA {
         // final state at 1
         nfa.states.push(true);
         // transition
-        nfa.transitions.insert((0, pat), HashSet::from([1]));
+        nfa.transitions.insert((0, pat), vec![1]);
 
         // keep worklist of transition labels to decompose
         let mut worklist: Vec<(DFAState, &RegExp, DFAState)> =
@@ -244,42 +239,39 @@ impl DFA {
     ///
     /// Returns the set of all states reachable by following `Empty` transitions,
     /// including any input states.
+    /// `current_states` is empty afterwards, and `next_states` contains all of
+    /// the states reachable by epsilon closure.
     /// Additionally, returns whether or not any of the reachable states is
     /// accepting.
     fn eps_closure(
         &self,
-        pre_states: &mut HashSet<DFAState>,
-    ) -> (HashSet<DFAState>, bool) {
+        current_states: &mut Vec<DFAState>,
+        next_states: &mut Vec<DFAState>,
+    ) -> bool {
         let DFA(internal) = self;
-        let mut post_states: HashSet<DFAState> = HashSet::new();
-        // check if any pre states accept
-        let mut accepting = false;
-        while !pre_states.is_empty() {
-            post_states = post_states.union(pre_states).cloned().collect();
-            // get a state
-            let &state = pre_states.iter().next().unwrap();
-            // if anything accepts, make accepting true, don't overwrite false
-            accepting |= internal.states[state];
-            // remove the state from pre_states
-            pre_states.remove(&state);
-            // get empty transition end states
-            if let Some(end_states) = internal.transitions.get(&(state, None)) {
-                for &end_state in end_states {
-                    // add any new states to pre for further epsilon traversal
-                    pre_states.insert(end_state);
-                    // add any new states to post to keep track of them
-                    post_states.insert(end_state);
 
-                    // if post_state is accepting, mark accepting
-                    // optimization: skip check if accepting already marked
-                    if !accepting && internal.states[end_state] {
-                        accepting = true;
-                    }
-                }
+        let mut accepting = false;
+
+        while let Some(state) = current_states.pop() {
+            if next_states.contains(&state) {
+                continue;
+            }
+
+            // get all epsilon transitions, add to current states
+            if let Some(neighbors) = internal.transitions.get(&(state, None)) {
+                current_states.append(&mut neighbors.clone());
+            }
+
+            // mark this state as visited, and also mark if it's accepting
+            next_states.push(state);
+            if internal.states[state] {
+                accepting = true;
             }
         }
 
-        (post_states, accepting)
+        debug_assert!(current_states.is_empty());
+
+        accepting
     }
 
     /// Match a (prefix of) a string against the DFA
@@ -289,30 +281,45 @@ impl DFA {
     pub fn matches_against(&self, s: &str) -> Option<usize> {
         let DFA(internal) = self;
 
-        // before epsilon closure
-        let mut pre_states: HashSet<DFAState> = HashSet::from([0 as DFAState]);
-        // after epsilon closure
-        let mut post_states: HashSet<DFAState>;
+        // switch to Vec since we're expecting to not have too many states
 
-        let mut accepting: Option<usize>;
+        // we know that we'll only have at most internal.states.len() states
+        // so we can reserve that much space
+
+        let mut current_states = Vec::with_capacity(internal.states.len());
+        let mut next_states = Vec::with_capacity(internal.states.len());
+        let mut accepting: Option<usize> = None;
+
+        // start at initial state
+        current_states.push(0);
 
         // need to perform epsilon closure even if input string is empty, cannot
         // rely on doing it in the loop to handle the empty case as well
-        (post_states, accepting) = match self.eps_closure(&mut pre_states) {
-            (post, true) => (post, Some(0)),
-            (post, false) => (post, None),
-        };
+
+        if self.eps_closure(&mut current_states, &mut next_states) {
+            accepting = Some(0);
+        }
+        // set current states to next states
+        std::mem::swap(&mut current_states, &mut next_states);
 
         for (i, c) in s.chars().enumerate() {
             // transition via c
             // insert new states into pre_states
-            for state in post_states.drain() {
+            assert!(next_states.is_empty());
+
+            for state in current_states.drain(..) {
                 // add new states to pre_states
                 if let Some(end_states) =
                     internal.transitions.get(&(state, Some(c)))
                 {
-                    pre_states =
-                        pre_states.union(end_states).cloned().collect();
+                    let _ = end_states
+                        .iter()
+                        .map(|s| {
+                            if !next_states.contains(s) {
+                                next_states.push(*s)
+                            }
+                        })
+                        .collect::<Vec<_>>();
                 }
                 // if no end states, do nothing, to drain out the bad state
             }
@@ -320,15 +327,13 @@ impl DFA {
             // transition via empty
             // if no match, don't overwrite last match found
             // since accepting keeps track of length, need to add one
-            (post_states, accepting) = match self.eps_closure(&mut pre_states) {
-                (post, true) => (post, Some(i + 1)),
-                (post, false) => (post, accepting),
-            };
-            // pre_states is empty now
+            if self.eps_closure(&mut next_states, &mut current_states) {
+                accepting = Some(i + 1);
+            }
 
             // if post_states is empty, break early since we can't possibly
             // transition from anywhere
-            if post_states.is_empty() {
+            if current_states.is_empty() {
                 break;
             }
         }
