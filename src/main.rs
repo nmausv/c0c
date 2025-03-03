@@ -79,6 +79,9 @@ fn compile(
         // println!("program elaborated to:\n{elab_ast}\n");
     }
     if !static_analysis::check(&elab_ast) {
+        if verbose {
+            eprintln!("program failed static analysis");
+        }
         return Err(());
     }
     if verbose {
@@ -131,6 +134,7 @@ mod tests {
 
         use crate::compile;
 
+        #[derive(Debug)]
         enum TestResult {
             Return(i64), // compile and return value
             DivZero,     // compile but raise divzero
@@ -155,21 +159,26 @@ mod tests {
             }
         }
 
-        fn test_file(file: String, path: &str) -> bool {
+        fn test_file(file: String, path: &str, verbose: bool) -> bool {
             let expected = get_test_result(&file).unwrap_or_else(|| {
                 panic!("test file {path} should have valid expected result")
             });
 
             // compile each file without verbose mode
             let output =
-                compile(&file, false, crate::codegen::Target::AbstractAssembly);
+                compile(&file, verbose, crate::codegen::Target::AbstractAssembly);
 
             if !match expected {
                 TestResult::Return(_) => output.is_ok(),
                 TestResult::Error => output.is_err(),
                 TestResult::DivZero => output.is_ok(),
             } {
-                eprintln!("file {} did not pass", path);
+                eprintln!(
+                    "file {} did not pass: expected {:?}, got success result {}",
+                    path,
+                    expected,
+                    output.is_ok(),
+                );
                 return false;
             } else {
                 eprintln!("passed");
@@ -202,7 +211,7 @@ mod tests {
                     }
                 };
 
-                if !test_file(file, path_str) {
+                if !test_file(file, path_str, false) {
                     failures.push(path_str.to_string());
                 }
             }
@@ -232,7 +241,7 @@ mod tests {
             let path = "tests/l1-large/maryammirzakhani-chinese.l1";
             let file = read_to_string(path).unwrap();
 
-            assert!(test_file(file, path));
+            assert!(test_file(file, path, true));
         }
     }
 }
