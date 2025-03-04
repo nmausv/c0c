@@ -95,8 +95,8 @@ impl<'input> std::fmt::Display for Stmt<'input> {
 pub enum Exp<'input> {
     Num(Num),
     Lvalue(Lvalue<'input>),
-    BinOp(Box<Exp<'input>>, BinOp, Box<Exp<'input>>),
-    UnOp(UnOp, Box<Exp<'input>>),
+    Binop(Box<Exp<'input>>, Binop, Box<Exp<'input>>),
+    Unop(Unop, Box<Exp<'input>>),
     True,
     False,
     Ternary {
@@ -111,8 +111,8 @@ impl<'input> std::fmt::Display for Exp<'input> {
         match self {
             Self::Num(n) => write!(f, "{n}"),
             Self::Lvalue(var) => write!(f, "{var}"),
-            Self::BinOp(e1, op, e2) => write!(f, "({e1} {op} {e2})"),
-            Self::UnOp(op, e) => write!(f, "{op}({e})"),
+            Self::Binop(e1, op, e2) => write!(f, "({e1} {op} {e2})"),
+            Self::Unop(op, e) => write!(f, "{op}({e})"),
             Self::True => write!(f, "true"),
             Self::False => write!(f, "false"),
             Self::Ternary {
@@ -149,7 +149,7 @@ impl<'input> std::fmt::Display for Lvalue<'input> {
 
 // Operators
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum BinOp {
+pub enum Binop {
     Plus,
     Minus,
     Times,
@@ -170,7 +170,7 @@ pub enum BinOp {
     Shr,
 }
 
-impl std::fmt::Display for BinOp {
+impl std::fmt::Display for Binop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Plus => write!(f, "+"),
@@ -196,13 +196,13 @@ impl std::fmt::Display for BinOp {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum UnOp {
+pub enum Unop {
     LogNegate,
     BitNegate,
     Negative,
 }
 
-impl std::fmt::Display for UnOp {
+impl std::fmt::Display for Unop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::LogNegate => write!(f, "!"),

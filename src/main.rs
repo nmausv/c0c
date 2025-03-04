@@ -7,6 +7,7 @@
 
 mod codegen;
 mod frontend;
+mod heap_recursion;
 mod regalloc;
 mod static_analysis;
 mod temps;
@@ -165,8 +166,11 @@ mod tests {
             });
 
             // compile each file without verbose mode
-            let output =
-                compile(&file, verbose, crate::codegen::Target::AbstractAssembly);
+            let output = compile(
+                &file,
+                verbose,
+                crate::codegen::Target::AbstractAssembly,
+            );
 
             if !match expected {
                 TestResult::Return(_) => output.is_ok(),

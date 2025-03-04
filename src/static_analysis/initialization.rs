@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::frontend::elab_ast::{Exp, Ident, Lvalue, Program, Stmt, Type};
 
+use crate::heap_recursion::FrameProgress::{self, Done, InProgress, New};
+
 type VarSet<'input> = HashSet<Ident<'input>>;
 type TypeMap<'input> = HashMap<Ident<'input>, Type>;
 
@@ -13,7 +15,7 @@ fn exp_uses_only(exp: &Exp, initialized: &VarSet) -> bool {
         Exp::PureBinop(e1, _, e2) | Exp::ImpureBinop(e1, _, e2) => {
             exp_uses_only(e1, initialized) && exp_uses_only(e2, initialized)
         }
-        Exp::UnOp(_, e) => exp_uses_only(e, initialized),
+        Exp::Unop(_, e) => exp_uses_only(e, initialized),
         Exp::Ternary {
             cond,
             exp_true,
@@ -142,13 +144,6 @@ fn stmt_initializes<'input>(
     }
 }
 
-enum FrameProgress<T> {
-    New,
-    InProgress,
-    Done(T),
-}
-use FrameProgress::{Done, InProgress, New};
-
 enum FrameKind<'input> {
     Seq {
         list: &'input VecDeque<Stmt<'input>>,
@@ -228,206 +223,210 @@ where
     }
 }
 
-/// Checks that all variables are initialized before being used.
-/// A `return` initializes all variables currently in scope, so programs like
-/// ```c
-/// int main() {
-///   int x; // (1)
-///   return 0;
-///   int y = x + 1; // (2)
-/// }
-/// ```
-/// are valid, even though `x` is used before being initialized at (2).
-/// Note that variables not in scope are not initialized, so removing line (1) is not valid.
-///
-/// This function used to be recursive, but for very long programs, that could overflow
-/// the stack.
-/// Now this function uses heap space to keep track of `Frame`s, and manually recurses to
-/// save on stack space.
-pub fn initialization_check(elab_program: &Program) -> Result<(), ()> {
-    let mut env = StmtEnv {
-        initialized: HashSet::new(),
-        inscope: HashMap::new(),
-    };
-    let mut stack: Vec<Frame> = Vec::new();
-
-    stack.push(make_frame(elab_program.as_ref(), &env));
-
-    while let Some(mut frame) = stack.pop() {
-        match frame.kind {
-            FrameKind::Seq { list, next } => {
-                if next < list.len() {
-                    // get child statement
-                    let child_stmt = &list[next];
-                    // modify parent
-                    frame.kind = FrameKind::Seq {
-                        list,
-                        next: next + 1,
-                    };
-                    // push modified parent frame
-                    stack.push(frame);
-                    // push child frame
-                    let child_frame = make_frame(child_stmt, &env);
-                    stack.push(child_frame);
-                }
-            }
-            FrameKind::Declare { progress } => {
-                let Stmt::Declare(name, t, scope) = frame.statement else {
-                    unreachable!()
-                };
-                match progress {
-                    New => {
-                        // check double declare
-                        if env.inscope.contains_key(name) {
-                            return Err(());
-                        }
-                        env.inscope.insert(name, *t);
-
-                        // mark as done
-                        frame.kind = FrameKind::Declare { progress: Done(()) };
-
-                        // push modified parent
-                        stack.push(frame);
-
-                        // push child
-                        let scope_frame = make_frame(scope, &env);
-                        stack.push(scope_frame);
-                    }
-                    InProgress => {
-                        unreachable!()
-                    }
-                    Done(()) => {
-                        env.inscope.remove(name);
-                        env.initialized.remove(name);
-                    }
-                }
-            }
-            FrameKind::If {
-                environ,
-                if_env,
-                else_env,
-            } => {
-                let Stmt::If {
-                    cond,
-                    stmt_true,
-                    stmt_false,
-                } = frame.statement
-                else {
-                    unreachable!()
-                };
-                match (if_env, else_env) {
-                    (New, New) => {
-                        // check condition
-                        if !exp_uses_only(cond, &env.initialized) {
-                            return Err(());
-                        }
-
-                        // create if child frame, mark as in progress
-                        frame.kind = FrameKind::If {
-                            environ,
-                            if_env: InProgress,
-                            else_env: New,
-                        };
-                        let if_frame = make_frame(stmt_true, &env);
-
-                        // push modified parent
-                        stack.push(frame);
-
-                        // push child frame to stack
-                        stack.push(if_frame);
-                    }
-                    (InProgress, New) => {
-                        // store if environment, mark as done
-                        // mark else frame as in progress
-                        frame.kind = FrameKind::If {
-                            environ,
-                            if_env: Done(Box::new(env.clone())),
-                            else_env: New,
-                        };
-
-                        // make child frame
-                        let else_frame = make_frame(stmt_false, &env);
-
-                        // push modified parent
-                        stack.push(frame);
-
-                        // push child frame
-                        stack.push(else_frame);
-                    }
-                    (Done(if_env), InProgress) => {
-                        env.initialized = if_env
-                            .initialized
-                            .intersection(&env.initialized)
-                            .cloned()
-                            .collect();
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            FrameKind::While { environ, progress } => {
-                let Stmt::While { cond, body } = frame.statement else {
-                    unreachable!()
-                };
-                match progress {
-                    New => {
-                        if !exp_uses_only(cond, &env.initialized) {
-                            return Err(());
-                        }
-
-                        // mark as Done
-                        frame.kind = FrameKind::While {
-                            progress: Done(()),
-                            environ,
-                        };
-
-                        // push child
-                        stack.push(make_frame(body, &env));
-                    }
-                    InProgress => unreachable!(),
-                    Done(()) => {
-                        env = environ;
-                    }
-                }
-            }
-            FrameKind::Exp => {
-                let Stmt::Exp(exp) = frame.statement else {
-                    unreachable!()
-                };
-                if !exp_uses_only(exp, &env.initialized) {
-                    return Err(());
-                }
-            }
-            FrameKind::Nop => (),
-            FrameKind::Assign => {
-                let Stmt::Assign(Lvalue::Ident(name), exp) = frame.statement
-                else {
-                    unreachable!()
-                };
-                if env.inscope.contains_key(name)
-                    && exp_uses_only(exp, &env.initialized)
-                {
-                    env.initialized.insert(name);
-                } else {
-                    return Err(());
-                }
-            }
-            FrameKind::Return => {
-                let Stmt::Return(exp) = frame.statement else {
-                    unreachable!()
-                };
-                if exp_uses_only(exp, &env.initialized) {
-                    env.initialized.drain();
-                    for key in env.inscope.keys() {
-                        env.initialized.insert(key);
-                    }
-                } else {
-                    return Err(());
-                }
-            }
+impl<'a> Program<'a> {
+    /// Checks that all variables are initialized before being used.
+    /// A `return` initializes all variables currently in scope, so programs like
+    /// ```c
+    /// int main() {
+    ///   int x; // (1)
+    ///   return 0;
+    ///   int y = x + 1; // (2)
+    /// }
+    /// ```
+    /// are valid, even though `x` is used before being initialized at (2).
+    /// Note that variables not in scope are not initialized, so removing line (1) is not valid.
+    ///
+    /// This function used to be recursive, but for very long programs, that could overflow
+    /// the stack.
+    /// Now this function uses heap space to keep track of `Frame`s, and manually recurses to
+    /// save on stack space.
+    pub fn initialization_check(self: &'a Program<'a>) -> Result<(), ()> {
+        let mut env = StmtEnv {
+            initialized: HashSet::new(),
+            inscope: HashMap::new(),
         };
-    }
+        let mut stack: Vec<Frame> = Vec::new();
 
-    Ok(())
+        stack.push(make_frame(self.as_ref(), &env));
+
+        while let Some(mut frame) = stack.pop() {
+            match frame.kind {
+                FrameKind::Seq { list, next } => {
+                    if next < list.len() {
+                        // get child statement
+                        let child_stmt = &list[next];
+                        // modify parent
+                        frame.kind = FrameKind::Seq {
+                            list,
+                            next: next + 1,
+                        };
+                        // push modified parent frame
+                        stack.push(frame);
+                        // push child frame
+                        let child_frame = make_frame(child_stmt, &env);
+                        stack.push(child_frame);
+                    }
+                }
+                FrameKind::Declare { progress } => {
+                    let Stmt::Declare(name, t, scope) = frame.statement else {
+                        unreachable!()
+                    };
+                    match progress {
+                        New => {
+                            // check double declare
+                            if env.inscope.contains_key(name) {
+                                return Err(());
+                            }
+                            env.inscope.insert(name, *t);
+
+                            // mark as done
+                            frame.kind =
+                                FrameKind::Declare { progress: Done(()) };
+
+                            // push modified parent
+                            stack.push(frame);
+
+                            // push child
+                            let scope_frame = make_frame(scope, &env);
+                            stack.push(scope_frame);
+                        }
+                        InProgress => {
+                            unreachable!()
+                        }
+                        Done(()) => {
+                            env.inscope.remove(name);
+                            env.initialized.remove(name);
+                        }
+                    }
+                }
+                FrameKind::If {
+                    environ,
+                    if_env,
+                    else_env,
+                } => {
+                    let Stmt::If {
+                        cond,
+                        stmt_true,
+                        stmt_false,
+                    } = frame.statement
+                    else {
+                        unreachable!()
+                    };
+                    match (if_env, else_env) {
+                        (New, New) => {
+                            // check condition
+                            if !exp_uses_only(cond, &env.initialized) {
+                                return Err(());
+                            }
+
+                            // create if child frame, mark as in progress
+                            frame.kind = FrameKind::If {
+                                environ,
+                                if_env: InProgress,
+                                else_env: New,
+                            };
+                            let if_frame = make_frame(stmt_true, &env);
+
+                            // push modified parent
+                            stack.push(frame);
+
+                            // push child frame to stack
+                            stack.push(if_frame);
+                        }
+                        (InProgress, New) => {
+                            // store if environment, mark as done
+                            // mark else frame as in progress
+                            frame.kind = FrameKind::If {
+                                environ,
+                                if_env: Done(Box::new(env.clone())),
+                                else_env: New,
+                            };
+
+                            // make child frame
+                            let else_frame = make_frame(stmt_false, &env);
+
+                            // push modified parent
+                            stack.push(frame);
+
+                            // push child frame
+                            stack.push(else_frame);
+                        }
+                        (Done(if_env), InProgress) => {
+                            env.initialized = if_env
+                                .initialized
+                                .intersection(&env.initialized)
+                                .cloned()
+                                .collect();
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                FrameKind::While { environ, progress } => {
+                    let Stmt::While { cond, body } = frame.statement else {
+                        unreachable!()
+                    };
+                    match progress {
+                        New => {
+                            if !exp_uses_only(cond, &env.initialized) {
+                                return Err(());
+                            }
+
+                            // mark as Done
+                            frame.kind = FrameKind::While {
+                                progress: Done(()),
+                                environ,
+                            };
+
+                            // push child
+                            stack.push(make_frame(body, &env));
+                        }
+                        InProgress => unreachable!(),
+                        Done(()) => {
+                            env = environ;
+                        }
+                    }
+                }
+                FrameKind::Exp => {
+                    let Stmt::Exp(exp) = frame.statement else {
+                        unreachable!()
+                    };
+                    if !exp_uses_only(exp, &env.initialized) {
+                        return Err(());
+                    }
+                }
+                FrameKind::Nop => (),
+                FrameKind::Assign => {
+                    let Stmt::Assign(Lvalue::Ident(name), exp) =
+                        frame.statement
+                    else {
+                        unreachable!()
+                    };
+                    if env.inscope.contains_key(name)
+                        && exp_uses_only(exp, &env.initialized)
+                    {
+                        env.initialized.insert(name);
+                    } else {
+                        return Err(());
+                    }
+                }
+                FrameKind::Return => {
+                    let Stmt::Return(exp) = frame.statement else {
+                        unreachable!()
+                    };
+                    if exp_uses_only(exp, &env.initialized) {
+                        env.initialized.drain();
+                        for key in env.inscope.keys() {
+                            env.initialized.insert(key);
+                        }
+                    } else {
+                        return Err(());
+                    }
+                }
+            };
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -440,7 +439,7 @@ mod tests {
     #[test]
     fn empty_main() {
         let program: Program = Stmt::Return(Exp::Num(0)).into();
-        assert!(initialization_check(&program).is_ok());
+        assert!(program.initialization_check().is_ok());
     }
 
     #[test]
@@ -448,7 +447,7 @@ mod tests {
         let program: Program =
             Stmt::Declare("x", Type::Int, Box::new(Stmt::Return(Exp::Num(0))))
                 .into();
-        assert!(initialization_check(&program).is_ok());
+        assert!((&program).initialization_check().is_ok());
     }
 
     #[test]
@@ -458,7 +457,7 @@ mod tests {
             Stmt::Return(Exp::Num(0)),
         ]))
         .into();
-        assert!(initialization_check(&program).is_err());
+        assert!((&program).initialization_check().is_err());
     }
 
     #[test]
@@ -468,7 +467,7 @@ mod tests {
             Stmt::Assign("x".into(), Exp::Lvalue("x".into())),
         ]))
         .into();
-        assert!(initialization_check(&program).is_err());
+        assert!((&program).initialization_check().is_err());
     }
 
     #[test]
@@ -482,7 +481,7 @@ mod tests {
             ]))),
         )
         .into();
-        assert!(initialization_check(&program).is_ok());
+        assert!((&program).initialization_check().is_ok());
     }
 
     #[test]
@@ -499,7 +498,7 @@ mod tests {
             ),
         ]))
         .into();
-        assert!(initialization_check(&program).is_ok());
+        assert!((&program).initialization_check().is_ok());
     }
 
     #[test]
@@ -520,7 +519,7 @@ mod tests {
             ]))),
         )
         .into();
-        assert!(initialization_check(&program_noscope).is_err());
+        assert!((&program_noscope).initialization_check().is_err());
 
         // VALID
         // int main() {{int x = 0;} int x = 1; x = x;}
@@ -540,6 +539,6 @@ mod tests {
             ),
         ]))
         .into();
-        assert!(initialization_check(&program_scope).is_ok());
+        assert!((&program_scope).initialization_check().is_ok());
     }
 }

@@ -1,4 +1,4 @@
-use crate::frontend::elab_ast::{BinOp, ImpureBinOp, PureBinOp, UnOp};
+use crate::frontend::elab_ast::{Binop, ImpureBinop, PureBinop, Unop};
 
 use crate::temps::Label;
 
@@ -31,16 +31,16 @@ impl std::fmt::Display for Program {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Command {
     Store(String, PureExp),
-    StoreImpureBinOp {
+    StoreImpureBinop {
         dest: String,
         left: PureExp,
-        op: ImpureBinOp,
+        op: ImpureBinop,
         right: PureExp,
     },
     Return(PureExp),
     If {
         left: PureExp,
-        comp: BinOp,
+        comp: Binop,
         right: PureExp,
         branch_true: Label,
         branch_false: Label,
@@ -53,7 +53,7 @@ impl std::fmt::Display for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Store(var, exp) => write!(f, "{var} <- {exp}"),
-            Self::StoreImpureBinOp {
+            Self::StoreImpureBinop {
                 dest,
                 left,
                 op,
@@ -75,8 +75,8 @@ impl std::fmt::Display for Command {
 pub enum PureExp {
     Num(i32),
     Ident(String),
-    PureBinOp(Box<PureExp>, PureBinOp, Box<PureExp>),
-    UnOp(UnOp, Box<PureExp>),
+    PureBinop(Box<PureExp>, PureBinop, Box<PureExp>),
+    Unop(Unop, Box<PureExp>),
 }
 
 impl std::fmt::Display for PureExp {
@@ -84,8 +84,8 @@ impl std::fmt::Display for PureExp {
         match self {
             Self::Num(n) => write!(f, "{n}"),
             Self::Ident(var) => write!(f, "{var}"),
-            Self::PureBinOp(e1, op, e2) => write!(f, "{e1} {op} {e2}"),
-            Self::UnOp(op, exp) => write!(f, "{op}({exp})"),
+            Self::PureBinop(e1, op, e2) => write!(f, "{e1} {op} {e2}"),
+            Self::Unop(op, exp) => write!(f, "{op}({exp})"),
         }
     }
 }

@@ -1,15 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::frontend::elab_ast::{Program, Stmt};
-
-#[derive(Debug)]
-enum FrameProgress<T> {
-    New,
-    InProgress,
-    Done(T),
-}
-
-use FrameProgress::*;
+use crate::heap_recursion::FrameProgress::{self, Done, InProgress, New};
 
 enum Frame<'a> {
     Declare(&'a Stmt<'a>),
@@ -86,76 +78,107 @@ fn make_frame<'a>(s: &'a Stmt<'a>) -> Frame<'a> {
     }
 }
 
-fn return_check_statement(s: &Stmt) -> bool {
-    let mut stack: Vec<Frame> = Vec::new();
-    let mut returns: bool = false;
+impl<'a> Stmt<'a> {
+    fn return_check(self: &'a Stmt<'a>) -> bool {
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut returns: bool = false;
 
-    stack.push(make_frame(s));
+        stack.push(make_frame(self));
 
-    while let Some(frame) = stack.pop() {
-        match frame {
-            Frame::Declare(scope) => stack.push(make_frame(scope)),
-            Frame::Assign => returns = false,
-            Frame::Nop => returns = false,
-            Frame::Seq {
-                list,
-                next,
-                any_returns,
-            } => {
-                if next < list.len() {
-                    stack.push(Frame::Seq {
-                        list,
-                        next: next + 1,
-                        any_returns: any_returns || returns,
-                    });
-                    stack.push(make_frame(&list[next]));
-                } else {
-                    returns |= any_returns;
+        while let Some(frame) = stack.pop() {
+            match frame {
+                Frame::Declare(scope) => stack.push(make_frame(scope)),
+                Frame::Assign => returns = false,
+                Frame::Nop => returns = false,
+                Frame::Seq {
+                    list,
+                    next,
+                    any_returns,
+                } => {
+                    if next < list.len() {
+                        stack.push(Frame::Seq {
+                            list,
+                            next: next + 1,
+                            any_returns: any_returns || returns,
+                        });
+                        stack.push(make_frame(&list[next]));
+                    } else {
+                        returns |= any_returns;
+                    }
                 }
+                Frame::Exp => returns = false,
+                Frame::While => returns = false,
+                Frame::If {
+                    stmt_true,
+                    return_true,
+                    stmt_false,
+                    return_false,
+                } => match (return_true, return_false) {
+                    (New, New) => {
+                        stack.push(Frame::If {
+                            stmt_true,
+                            return_true: InProgress,
+                            stmt_false,
+                            return_false: New,
+                        });
+                        stack.push(make_frame(stmt_true));
+                    }
+                    (InProgress, New) => {
+                        stack.push(Frame::If {
+                            stmt_true,
+                            return_true: Done(returns),
+                            stmt_false,
+                            return_false: InProgress,
+                        });
+                        stack.push(make_frame(stmt_false));
+                    }
+                    (Done(if_returns), InProgress) => {
+                        returns &= if_returns;
+                    }
+                    _ => unreachable!(),
+                },
+                Frame::Return => returns = true,
             }
-            Frame::Exp => returns = false,
-            Frame::While => returns = false,
-            Frame::If {
-                stmt_true,
-                return_true,
-                stmt_false,
-                return_false,
-            } => match (return_true, return_false) {
-                (New, New) => {
-                    stack.push(Frame::If {
-                        stmt_true,
-                        return_true: InProgress,
-                        stmt_false,
-                        return_false: New,
-                    });
-                    stack.push(make_frame(stmt_true));
-                }
-                (InProgress, New) => {
-                    stack.push(Frame::If {
-                        stmt_true,
-                        return_true: Done(returns),
-                        stmt_false,
-                        return_false: InProgress,
-                    });
-                    stack.push(make_frame(stmt_false));
-                }
-                (Done(if_returns), InProgress) => {
-                    returns &= if_returns;
-                }
-                _ => unreachable!(),
-            },
-            Frame::Return => returns = true,
         }
-    }
 
-    returns
+        returns
+    }
 }
 
-pub fn return_check(program: &Program) -> Result<(), ()> {
-    if return_check_statement(program.as_ref()) {
-        Ok(())
-    } else {
-        Err(())
+impl<'a> Program<'a> {
+    /// Checks whether every possible control path through the given program
+    /// returns.
+    ///
+    /// Note that code like
+    /// ```c
+    /// int main() {
+    ///     while (true) {
+    ///         return 0;
+    ///     }
+    /// }
+    /// ```
+    /// will be recorded as not necessarily returning, since in general
+    /// `while` bodies may not be executed, and compile time evaluation
+    /// of the loop guard is not yet implemented.
+    ///
+    /// Thus, the above code can be amended to
+    /// ```c
+    /// int main() {
+    ///     while (true) {
+    ///         return 0;
+    ///     }
+    ///
+    ///     return -1;
+    /// }
+    /// ```
+    /// to maintain the same behaviour while respecting the current
+    /// return checker.
+    pub fn return_check(self: &'a Program<'a>) -> Result<(), ()> {
+        if self.as_ref().return_check() {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -163,12 +186,12 @@ pub fn return_check(program: &Program) -> Result<(), ()> {
 mod tests {
     use std::collections::VecDeque;
 
-    use crate::{frontend::elab_ast, static_analysis::returns::return_check};
+    use crate::frontend::elab_ast;
 
     #[test]
     fn empty() {
         let program: elab_ast::Program = elab_ast::Stmt::Nop.into();
-        assert!(return_check(&program).is_err());
+        assert!(program.return_check().is_err());
     }
 
     #[test]
@@ -186,11 +209,11 @@ mod tests {
         let program: elab_ast::Program =
             elab_ast::Stmt::Seq(seq.clone()).into();
 
-        assert!(return_check(&program).is_err());
+        assert!(program.return_check().is_err());
 
         seq.push_back(elab_ast::Stmt::Return(elab_ast::Exp::Num(0)));
-        let program = elab_ast::Stmt::Seq(seq).into();
+        let program: elab_ast::Program = elab_ast::Stmt::Seq(seq).into();
 
-        assert!(return_check(&program).is_ok());
+        assert!(program.return_check().is_ok());
     }
 }

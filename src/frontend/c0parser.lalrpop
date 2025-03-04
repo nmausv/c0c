@@ -71,47 +71,47 @@ Exp: Exp<'input> = {
   <Term> => <>,
 
 #[precedence(level="1")] #[assoc(side="right")]
-  "!" <Exp> => Exp::UnOp(UnOp::LogNegate, Box::new(<>)),
-  "~" <Exp> => Exp::UnOp(UnOp::BitNegate, Box::new(<>)),
-  "-" <Exp> => Exp::UnOp(UnOp::Negative, Box::new(<>)),
+  "!" <Exp> => Exp::Unop(Unop::LogNegate, Box::new(<>)),
+  "~" <Exp> => Exp::Unop(Unop::BitNegate, Box::new(<>)),
+  "-" <Exp> => Exp::Unop(Unop::Negative, Box::new(<>)),
 
 #[precedence(level="2")] #[assoc(side="left")]
-  <el:Exp> "*" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Times, Box::new(er)),
-  <el:Exp> "/" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Divide, Box::new(er)),
-  <el:Exp> "%" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Modulo, Box::new(er)),
+  <el:Exp> "*" <er:Exp> => Exp::Binop(Box::new(el), Binop::Times, Box::new(er)),
+  <el:Exp> "/" <er:Exp> => Exp::Binop(Box::new(el), Binop::Divide, Box::new(er)),
+  <el:Exp> "%" <er:Exp> => Exp::Binop(Box::new(el), Binop::Modulo, Box::new(er)),
 
 #[precedence(level="3")] #[assoc(side="left")]
-  <el:Exp> "+" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Plus, Box::new(er)),
-  <el:Exp> "-" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Minus, Box::new(er)),
+  <el:Exp> "+" <er:Exp> => Exp::Binop(Box::new(el), Binop::Plus, Box::new(er)),
+  <el:Exp> "-" <er:Exp> => Exp::Binop(Box::new(el), Binop::Minus, Box::new(er)),
 
 #[precedence(level="4")] #[assoc(side="left")]
-  <el:Exp> "<<" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Shl, Box::new(er)),
-  <el:Exp> ">>" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Shr, Box::new(er)),
+  <el:Exp> "<<" <er:Exp> => Exp::Binop(Box::new(el), Binop::Shl, Box::new(er)),
+  <el:Exp> ">>" <er:Exp> => Exp::Binop(Box::new(el), Binop::Shr, Box::new(er)),
 
 #[precedence(level="5")] #[assoc(side="left")]
-  <el:Exp> "<" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Less, Box::new(er)),
-  <el:Exp> "<=" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::LessEq, Box::new(er)),
-  <el:Exp> ">" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Greater, Box::new(er)),
-  <el:Exp> ">=" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::GreaterEq, Box::new(er)),
+  <el:Exp> "<" <er:Exp> => Exp::Binop(Box::new(el), Binop::Less, Box::new(er)),
+  <el:Exp> "<=" <er:Exp> => Exp::Binop(Box::new(el), Binop::LessEq, Box::new(er)),
+  <el:Exp> ">" <er:Exp> => Exp::Binop(Box::new(el), Binop::Greater, Box::new(er)),
+  <el:Exp> ">=" <er:Exp> => Exp::Binop(Box::new(el), Binop::GreaterEq, Box::new(er)),
 
 #[precedence(level="6")] #[assoc(side="left")]
-  <el:Exp> "==" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::Eq, Box::new(er)),
-  <el:Exp> "!=" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::NotEq, Box::new(er)),
+  <el:Exp> "==" <er:Exp> => Exp::Binop(Box::new(el), Binop::Eq, Box::new(er)),
+  <el:Exp> "!=" <er:Exp> => Exp::Binop(Box::new(el), Binop::NotEq, Box::new(er)),
 
 #[precedence(level="7")] #[assoc(side="left")]
-  <el:Exp> "&" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::BitAnd, Box::new(er)),
+  <el:Exp> "&" <er:Exp> => Exp::Binop(Box::new(el), Binop::BitAnd, Box::new(er)),
 
 #[precedence(level="8")] #[assoc(side="left")]
-  <el:Exp> "^" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::BitXor, Box::new(er)),
+  <el:Exp> "^" <er:Exp> => Exp::Binop(Box::new(el), Binop::BitXor, Box::new(er)),
 
 #[precedence(level="9")] #[assoc(side="left")]
-  <el:Exp> "|" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::BitOr, Box::new(er)),
+  <el:Exp> "|" <er:Exp> => Exp::Binop(Box::new(el), Binop::BitOr, Box::new(er)),
 
 #[precedence(level="10")] #[assoc(side="left")]
-  <el:Exp> "&&" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::LogAnd, Box::new(er)),
+  <el:Exp> "&&" <er:Exp> => Exp::Binop(Box::new(el), Binop::LogAnd, Box::new(er)),
 
 #[precedence(level="11")] #[assoc(side="left")]
-  <el:Exp> "||" <er:Exp> => Exp::BinOp(Box::new(el), BinOp::LogOr, Box::new(er)),
+  <el:Exp> "||" <er:Exp> => Exp::Binop(Box::new(el), Binop::LogOr, Box::new(er)),
 
 #[precedence(level="12")] #[assoc(side="right")]
   <ec:Exp> "?" <et:Exp> ":" <ef:Exp> => Exp::Ternary{cond: Box::new(ec), branch_true: Box::new(et), branch_false: Box::new(ef)}

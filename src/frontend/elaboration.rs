@@ -7,28 +7,28 @@ use super::elab_ast;
 
 fn elaborate_binop<'input>(
     eleft: &ast::Exp<'input>,
-    binop: &ast::BinOp,
+    binop: &ast::Binop,
     eright: &ast::Exp<'input>,
 ) -> Result<elab_ast::Exp<'input>, ()> {
     let elab_left = Box::new(elaborate_exp(eleft)?);
     let elab_right = Box::new(elaborate_exp(eright)?);
 
     match binop {
-        ast::BinOp::LogAnd => Ok(elab_ast::Exp::Ternary {
+        ast::Binop::LogAnd => Ok(elab_ast::Exp::Ternary {
             cond: elab_left,
             exp_true: elab_right,
             exp_false: Box::new(elab_ast::Exp::False),
         }),
-        ast::BinOp::LogOr => Ok(elab_ast::Exp::Ternary {
+        ast::Binop::LogOr => Ok(elab_ast::Exp::Ternary {
             cond: elab_left,
             exp_true: Box::new(elab_ast::Exp::True),
             exp_false: elab_right,
         }),
-        ast_binop => match elab_ast::BinOp::try_from(*ast_binop) {
-            Ok(elab_ast::BinOp::Pure(op)) => {
+        ast_binop => match elab_ast::Binop::try_from(*ast_binop) {
+            Ok(elab_ast::Binop::Pure(op)) => {
                 Ok(elab_ast::Exp::PureBinop(elab_left, op, elab_right))
             }
-            Ok(elab_ast::BinOp::Impure(op)) => {
+            Ok(elab_ast::Binop::Impure(op)) => {
                 Ok(elab_ast::Exp::ImpureBinop(elab_left, op, elab_right))
             }
             _ => {
@@ -68,10 +68,10 @@ fn elaborate_exp<'input>(
         ast::Exp::Lvalue(ast::Lvalue::Ident(name)) => {
             Ok(elab_ast::Exp::Lvalue((*name).into()))
         }
-        ast::Exp::BinOp(e1, binop, e2) => elaborate_binop(e1, binop, e2),
+        ast::Exp::Binop(e1, binop, e2) => elaborate_binop(e1, binop, e2),
         // extra handling for negative literals
-        ast::Exp::UnOp(op, exp) => match (op, exp.as_ref()) {
-            (ast::UnOp::Negative, ast::Exp::Num(ast::Num::DecNum(n))) => {
+        ast::Exp::Unop(op, exp) => match (op, exp.as_ref()) {
+            (ast::Unop::Negative, ast::Exp::Num(ast::Num::DecNum(n))) => {
                 // bounds check negative integer literals
                 if i128::from(i32::MIN) <= -(*n)
                     && -(*n) <= i128::from(i32::MAX) + 1
@@ -84,7 +84,7 @@ fn elaborate_exp<'input>(
                     Err(())
                 }
             }
-            _ => Ok(elab_ast::Exp::UnOp(*op, Box::new(elaborate_exp(exp)?))),
+            _ => Ok(elab_ast::Exp::Unop(*op, Box::new(elaborate_exp(exp)?))),
         },
         ast::Exp::True => Ok(elab_ast::Exp::True),
         ast::Exp::False => Ok(elab_ast::Exp::False),
@@ -100,19 +100,19 @@ fn elaborate_exp<'input>(
     }
 }
 
-fn extract_binop(asnop: ast::AsnOp) -> Result<elab_ast::BinOp, ()> {
+fn extract_binop(asnop: ast::AsnOp) -> Result<elab_ast::Binop, ()> {
     match asnop {
         ast::AsnOp::Eq => Err(()),
-        ast::AsnOp::PlusEq => Ok(elab_ast::PureBinOp::Plus.into()),
-        ast::AsnOp::MinusEq => Ok(elab_ast::PureBinOp::Minus.into()),
-        ast::AsnOp::TimesEq => Ok(elab_ast::PureBinOp::Times.into()),
-        ast::AsnOp::DivEq => Ok(elab_ast::ImpureBinOp::Divide.into()),
-        ast::AsnOp::ModEq => Ok(elab_ast::ImpureBinOp::Modulo.into()),
-        ast::AsnOp::AndEq => Ok(elab_ast::PureBinOp::BitAnd.into()),
-        ast::AsnOp::XorEq => Ok(elab_ast::PureBinOp::BitXor.into()),
-        ast::AsnOp::OrEq => Ok(elab_ast::PureBinOp::BitOr.into()),
-        ast::AsnOp::ShlEq => Ok(elab_ast::ImpureBinOp::Shl.into()),
-        ast::AsnOp::ShrEq => Ok(elab_ast::ImpureBinOp::Shr.into()),
+        ast::AsnOp::PlusEq => Ok(elab_ast::PureBinop::Plus.into()),
+        ast::AsnOp::MinusEq => Ok(elab_ast::PureBinop::Minus.into()),
+        ast::AsnOp::TimesEq => Ok(elab_ast::PureBinop::Times.into()),
+        ast::AsnOp::DivEq => Ok(elab_ast::ImpureBinop::Divide.into()),
+        ast::AsnOp::ModEq => Ok(elab_ast::ImpureBinop::Modulo.into()),
+        ast::AsnOp::AndEq => Ok(elab_ast::PureBinop::BitAnd.into()),
+        ast::AsnOp::XorEq => Ok(elab_ast::PureBinop::BitXor.into()),
+        ast::AsnOp::OrEq => Ok(elab_ast::PureBinop::BitOr.into()),
+        ast::AsnOp::ShlEq => Ok(elab_ast::ImpureBinop::Shl.into()),
+        ast::AsnOp::ShrEq => Ok(elab_ast::ImpureBinop::Shr.into()),
     }
 }
 
@@ -140,12 +140,12 @@ fn elaborate_stmt<'input>(
             let lval: elab_ast::Lvalue = (*name).into();
 
             let elab_exp = match extract_binop(*asnop) {
-                Ok(elab_ast::BinOp::Pure(op)) => elab_ast::Exp::PureBinop(
+                Ok(elab_ast::Binop::Pure(op)) => elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval)),
                     op,
                     Box::new(elaborate_exp(exp)?),
                 ),
-                Ok(elab_ast::BinOp::Impure(op)) => elab_ast::Exp::ImpureBinop(
+                Ok(elab_ast::Binop::Impure(op)) => elab_ast::Exp::ImpureBinop(
                     Box::new(elab_ast::Exp::Lvalue(lval)),
                     op,
                     Box::new(elaborate_exp(exp)?),
@@ -159,7 +159,7 @@ fn elaborate_stmt<'input>(
                 (*var).into(),
                 elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::Lvalue((*var).into())),
-                    elab_ast::PureBinOp::Plus,
+                    elab_ast::PureBinop::Plus,
                     Box::new(elab_ast::Exp::Num(1)),
                 ),
             ))
@@ -169,7 +169,7 @@ fn elaborate_stmt<'input>(
                 (*var).into(),
                 elab_ast::Exp::PureBinop(
                     Box::new(elab_ast::Exp::from(elab_ast::Lvalue::from(*var))),
-                    elab_ast::PureBinOp::Minus,
+                    elab_ast::PureBinop::Minus,
                     Box::new(elab_ast::Exp::Num(1)),
                 ),
             ))

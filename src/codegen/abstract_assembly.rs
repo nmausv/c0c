@@ -8,21 +8,21 @@ pub enum Instruction {
         d: Destination,
         s: Source,
     },
-    BinOp {
+    Binop {
         d: Destination,
         s1: Source,
-        op: crate::frontend::ast::BinOp,
+        op: crate::frontend::ast::Binop,
         s2: Source,
     },
-    UnOp {
+    Unop {
         d: Destination,
-        op: crate::frontend::ast::UnOp,
+        op: crate::frontend::ast::Unop,
         s: Source,
     },
     Return,
     If {
         left: Source,
-        comp: crate::frontend::ast::BinOp,
+        comp: crate::frontend::ast::Binop,
         right: Source,
         branch_true: Label,
         branch_false: Label,
@@ -35,10 +35,10 @@ impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Return => write!(f, "return"),
-            Self::BinOp { d, s1, op, s2 } => {
+            Self::Binop { d, s1, op, s2 } => {
                 write!(f, "{d} <- {s1} {op} {s2}")
             }
-            Self::UnOp { d, op, s } => {
+            Self::Unop { d, op, s } => {
                 write!(f, "{d} <- ({op}{s})")
             }
             Self::Move { d, s } => write!(f, "{d} <- {s}"),
@@ -98,24 +98,24 @@ fn cogen_exp(
                 s: Operand::Temp(x.into()),
             }]
         }
-        PureExp::PureBinOp(e1, op, e2) => {
+        PureExp::PureBinop(e1, op, e2) => {
             let t1 = Operand::Temp(tf.make_temp());
             let t2 = Operand::Temp(tf.make_temp());
             let mut first = cogen_exp(t1.clone(), *e1, tf);
             let mut second = cogen_exp(t2.clone(), *e2, tf);
             first.append(&mut second);
-            first.push(Instruction::BinOp {
+            first.push(Instruction::Binop {
                 d: dest,
                 s1: t1,
-                op: crate::frontend::ast::BinOp::from(op),
+                op: crate::frontend::ast::Binop::from(op),
                 s2: t2,
             });
             first
         }
-        PureExp::UnOp(op, exp) => {
+        PureExp::Unop(op, exp) => {
             let t1 = Operand::Temp(tf.make_temp());
             let mut instructions = cogen_exp(t1.clone(), *exp, tf);
-            instructions.push(Instruction::UnOp { d: dest, op, s: t1 });
+            instructions.push(Instruction::Unop { d: dest, op, s: t1 });
 
             instructions
         }
@@ -134,7 +134,7 @@ fn cogen_command(
             program
         }
         Command::Store(var, e) => cogen_exp(Operand::Temp(var.into()), e, tf),
-        Command::StoreImpureBinOp {
+        Command::StoreImpureBinop {
             dest,
             left,
             op,
@@ -145,10 +145,10 @@ fn cogen_command(
             let mut first = cogen_exp(t1.clone(), left, tf);
             let mut second = cogen_exp(t2.clone(), right, tf);
             first.append(&mut second);
-            first.push(Instruction::BinOp {
+            first.push(Instruction::Binop {
                 d: Operand::Temp(dest.into()),
                 s1: t1,
-                op: crate::frontend::ast::BinOp::from(op),
+                op: crate::frontend::ast::Binop::from(op),
                 s2: t2,
             });
             first
@@ -171,7 +171,7 @@ fn cogen_command(
 
             left_instr.push(Instruction::If {
                 left: t1,
-                comp: crate::frontend::ast::BinOp::from(comp),
+                comp: crate::frontend::ast::Binop::from(comp),
                 right: t2,
                 branch_true,
                 branch_false,
@@ -239,7 +239,7 @@ mod abs_asm_tests {
                 state.insert(d.clone(), stored_s);
                 Ok(None)
             }
-            Instruction::BinOp { d, s1, op, s2 } => {
+            Instruction::Binop { d, s1, op, s2 } => {
                 let stored_s1 = match s1 {
                     Operand::IntConst(n) => *n,
                     _ => match state.get(s1) {
@@ -263,13 +263,13 @@ mod abs_asm_tests {
                     },
                 };
                 let result = match op {
-                    crate::frontend::ast::BinOp::Plus => stored_s1 + stored_s2,
-                    crate::frontend::ast::BinOp::Minus => stored_s1 - stored_s2,
-                    crate::frontend::ast::BinOp::Times => stored_s1 * stored_s2,
-                    crate::frontend::ast::BinOp::Divide => {
+                    crate::frontend::ast::Binop::Plus => stored_s1 + stored_s2,
+                    crate::frontend::ast::Binop::Minus => stored_s1 - stored_s2,
+                    crate::frontend::ast::Binop::Times => stored_s1 * stored_s2,
+                    crate::frontend::ast::Binop::Divide => {
                         stored_s1 / stored_s2
                     }
-                    crate::frontend::ast::BinOp::Modulo => {
+                    crate::frontend::ast::Binop::Modulo => {
                         stored_s1 % stored_s2
                     }
                     _ => todo!("abstract assembly simulation"),
@@ -331,28 +331,28 @@ mod abs_asm_tests {
         let t3 = Operand::Temp(String::from("t3").into());
         let t4 = Operand::Temp(String::from("t4").into());
         let program = vec![
-            Instruction::BinOp {
+            Instruction::Binop {
                 d: t1.clone(),
                 s1: Operand::IntConst(3),
-                op: crate::frontend::ast::BinOp::Plus,
+                op: crate::frontend::ast::Binop::Plus,
                 s2: Operand::IntConst(8),
             },
-            Instruction::BinOp {
+            Instruction::Binop {
                 d: t2.clone(),
                 s1: t1.clone(),
-                op: crate::frontend::ast::BinOp::Minus,
+                op: crate::frontend::ast::Binop::Minus,
                 s2: Operand::IntConst(5),
             },
-            Instruction::BinOp {
+            Instruction::Binop {
                 d: t3.clone(),
                 s1: t2.clone(),
-                op: crate::frontend::ast::BinOp::Times,
+                op: crate::frontend::ast::Binop::Times,
                 s2: Operand::IntConst(6),
             },
-            Instruction::BinOp {
+            Instruction::Binop {
                 d: t4.clone(),
                 s1: t3.clone(),
-                op: crate::frontend::ast::BinOp::Modulo,
+                op: crate::frontend::ast::Binop::Modulo,
                 s2: Operand::IntConst(5),
             },
             Instruction::Move {

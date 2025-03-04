@@ -16,7 +16,7 @@ fn translate_bool<'input>(
     match boolexp {
         elab_ast::Exp::Num(1) => vec![tree::Command::Goto(branch_true)],
         elab_ast::Exp::Num(0) => vec![tree::Command::Goto(branch_false)],
-        elab_ast::Exp::UnOp(elab_ast::UnOp::LogNegate, exp) => {
+        elab_ast::Exp::Unop(elab_ast::Unop::LogNegate, exp) => {
             translate_bool(tf, exp.as_ref(), branch_false, branch_true)
         }
         elab_ast::Exp::PureBinop(e1, op, e2)
@@ -84,7 +84,7 @@ fn translate_bool<'input>(
             // else goto branch_false
             commands.push(tree::Command::If {
                 left: pure,
-                comp: elab_ast::BinOp::Pure(elab_ast::PureBinOp::NotEq),
+                comp: elab_ast::Binop::Pure(elab_ast::PureBinop::NotEq),
                 right: tree::PureExp::Num(0),
                 branch_true,
                 branch_false,
@@ -116,21 +116,21 @@ fn translate_exp<'input>(
             c1.append(&mut c2);
             (
                 c1,
-                tree::PureExp::PureBinOp(Box::new(p1), *binop, Box::new(p2)),
+                tree::PureExp::PureBinop(Box::new(p1), *binop, Box::new(p2)),
             )
         }
-        elab_ast::Exp::UnOp(op, exp)
+        elab_ast::Exp::Unop(op, exp)
             if op.signature() == OpType::Arithmetic =>
         {
             let (commands, pure) = translate_exp(tf, exp.as_ref());
-            (commands, tree::PureExp::UnOp(*op, Box::new(pure)))
+            (commands, tree::PureExp::Unop(*op, Box::new(pure)))
         }
         elab_ast::Exp::ImpureBinop(e1, binop, e2) => {
             let (mut c1, p1) = translate_exp(tf, e1.as_ref());
             let (mut c2, p2) = translate_exp(tf, e2.as_ref());
             c1.append(&mut c2);
             let t1 = tf.make_temp();
-            c1.push(tree::Command::StoreImpureBinOp {
+            c1.push(tree::Command::StoreImpureBinop {
                 dest: t1.clone().into(),
                 left: p1,
                 op: *binop,
