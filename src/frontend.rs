@@ -43,24 +43,24 @@ mod parser_tests {
         let result = parser.parse(input, lexer).unwrap();
         assert!(result.body.len() == 1);
         let body = result.body[0].clone();
-        let expected = Stmt::Return(Exp::BinOp(
-            Box::new(Exp::BinOp(
+        let expected = Stmt::Return(Exp::Binop(
+            Box::new(Exp::Binop(
                 Box::new(Exp::Num(Num::DecNum(1))),
-                BinOp::Plus,
+                Binop::Plus,
                 Box::new(Exp::Num(Num::DecNum(2))),
             )),
-            BinOp::Minus,
-            Box::new(Exp::BinOp(
-                Box::new(Exp::BinOp(
-                    Box::new(Exp::BinOp(
+            Binop::Minus,
+            Box::new(Exp::Binop(
+                Box::new(Exp::Binop(
+                    Box::new(Exp::Binop(
                         Box::new(Exp::Num(Num::DecNum(3))),
-                        BinOp::Times,
+                        Binop::Times,
                         Box::new(Exp::Num(Num::DecNum(4))),
                     )),
-                    BinOp::Divide,
+                    Binop::Divide,
                     Box::new(Exp::Num(Num::DecNum(5))),
                 )),
-                BinOp::Modulo,
+                Binop::Modulo,
                 Box::new(Exp::Num(Num::DecNum(6))),
             )),
         ));
