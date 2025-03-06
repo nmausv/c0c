@@ -8,23 +8,178 @@ type VarSet<'input> = HashSet<Ident<'input>>;
 type TypeMap<'input> = HashMap<Ident<'input>, Type>;
 
 // true if and only if the expression uses only variables in the initialized set
-fn exp_uses_only(exp: &Exp, initialized: &VarSet) -> bool {
-    match exp {
-        Exp::Num(_) | Exp::True | Exp::False => true,
-        Exp::Lvalue(Lvalue::Ident(x)) => initialized.contains(x),
-        Exp::PureBinop(e1, _, e2) | Exp::ImpureBinop(e1, _, e2) => {
-            exp_uses_only(e1, initialized) && exp_uses_only(e2, initialized)
+
+enum ExpFrame<'a> {
+    Num,
+    True,
+    False,
+    Lvalue(Lvalue<'a>),
+    Binop {
+        left: &'a Exp<'a>,
+        left_progress: FrameProgress<()>,
+        right: &'a Exp<'a>,
+        right_progress: FrameProgress<()>,
+    },
+    Unop {
+        exp: &'a Exp<'a>,
+    },
+    Ternary {
+        cond: &'a Exp<'a>,
+        cond_progress: FrameProgress<()>,
+        true_exp: &'a Exp<'a>,
+        true_progress: FrameProgress<()>,
+        false_exp: &'a Exp<'a>,
+        false_progress: FrameProgress<()>,
+    },
+}
+
+impl<'a> From<&'a Exp<'a>> for ExpFrame<'a> {
+    fn from(value: &'a Exp<'a>) -> Self {
+        match value {
+            Exp::Num(_) => Self::Num,
+            Exp::Lvalue(lvalue) => Self::Lvalue(*lvalue),
+            Exp::PureBinop(left, _, right)
+            | Exp::ImpureBinop(left, _, right) => Self::Binop {
+                left,
+                left_progress: New,
+                right,
+                right_progress: New,
+            },
+            Exp::Unop(_, exp) => Self::Unop { exp },
+            Exp::True => Self::True,
+            Exp::False => Self::False,
+            Exp::Ternary {
+                cond,
+                exp_true,
+                exp_false,
+            } => Self::Ternary {
+                cond,
+                cond_progress: New,
+                true_exp: exp_true,
+                true_progress: New,
+                false_exp: exp_false,
+                false_progress: New,
+            },
         }
-        Exp::Unop(_, e) => exp_uses_only(e, initialized),
-        Exp::Ternary {
-            cond,
-            exp_true,
-            exp_false,
-        } => {
-            exp_uses_only(cond, initialized)
-                && exp_uses_only(exp_true, initialized)
-                && exp_uses_only(exp_false, initialized)
+    }
+}
+
+impl<'input> Exp<'input> {
+    fn uses_only_iterative(&self, initialized: &VarSet) -> bool {
+        let mut stack = Vec::new();
+        stack.push(self.into());
+
+        while let Some(frame) = stack.pop() {
+            match frame {
+                ExpFrame::Num | ExpFrame::True | ExpFrame::False => (),
+                ExpFrame::Lvalue(Lvalue::Ident(name)) => {
+                    if !initialized.contains(name) {
+                        return false;
+                    }
+                }
+                ExpFrame::Unop { exp } => {
+                    stack.push(exp.into());
+                }
+                ExpFrame::Binop {
+                    left,
+                    left_progress,
+                    right,
+                    right_progress,
+                } => match (left_progress, right_progress) {
+                    (New, New) => {
+                        stack.push(ExpFrame::Binop {
+                            left,
+                            left_progress: InProgress,
+                            right,
+                            right_progress: New,
+                        });
+                        stack.push(left.into());
+                    }
+                    (InProgress, New) => {
+                        stack.push(ExpFrame::Binop {
+                            left,
+                            left_progress: Done(()),
+                            right,
+                            right_progress: InProgress,
+                        });
+                        stack.push(right.into());
+                    }
+                    (Done(_), InProgress) => {}
+                    _ => unreachable!(),
+                },
+                ExpFrame::Ternary {
+                    cond,
+                    cond_progress,
+                    true_exp,
+                    true_progress,
+                    false_exp,
+                    false_progress,
+                } => match (cond_progress, true_progress, false_progress) {
+                    (New, New, New) => {
+                        stack.push(ExpFrame::Ternary {
+                            cond,
+                            cond_progress: InProgress,
+                            true_exp,
+                            true_progress: New,
+                            false_exp,
+                            false_progress: New,
+                        });
+                        stack.push(cond.into());
+                    }
+                    (InProgress, New, New) => {
+                        stack.push(ExpFrame::Ternary {
+                            cond,
+                            cond_progress: Done(()),
+                            true_exp,
+                            true_progress: InProgress,
+                            false_exp,
+                            false_progress: New,
+                        });
+                        stack.push(true_exp.into());
+                    }
+                    (Done(_), InProgress, New) => {
+                        stack.push(ExpFrame::Ternary {
+                            cond,
+                            cond_progress: Done(()),
+                            true_exp,
+                            true_progress: Done(()),
+                            false_exp,
+                            false_progress: InProgress,
+                        });
+                        stack.push(false_exp.into());
+                    }
+                    (Done(_), Done(_), InProgress) => {}
+                    _ => todo!(),
+                },
+            }
         }
+
+        true
+    }
+
+    fn uses_only_recursive(&self, initialized: &VarSet) -> bool {
+        match self {
+            Exp::Num(_) | Exp::True | Exp::False => true,
+            Exp::Lvalue(Lvalue::Ident(x)) => initialized.contains(x),
+            Exp::PureBinop(e1, _, e2) | Exp::ImpureBinop(e1, _, e2) => {
+                e1.uses_only_recursive(initialized)
+                    && e2.uses_only_recursive(initialized)
+            }
+            Exp::Unop(_, e) => e.uses_only_recursive(initialized),
+            Exp::Ternary {
+                cond,
+                exp_true,
+                exp_false,
+            } => {
+                cond.uses_only_recursive(initialized)
+                    && exp_true.uses_only_recursive(initialized)
+                    && exp_false.uses_only_recursive(initialized)
+            }
+        }
+    }
+
+    fn uses_only(&self, initialized: &VarSet) -> bool {
+        self.uses_only_iterative(initialized)
     }
 }
 
@@ -34,112 +189,111 @@ struct StmtEnv<'input> {
     inscope: TypeMap<'input>,
 }
 
-/// Given an environment `env` and a statment `s`, returns a new environment `s'`
-/// if `s` assigns only to variables in the scope of `env`, and uses only variables initialized in `env`,
-/// leaving a resulting environment of `s'`.
-fn stmt_initializes<'input>(
-    mut env: StmtEnv<'input>,
-    s: &Stmt<'input>,
-) -> Option<StmtEnv<'input>> {
-    match s {
-        Stmt::Nop => Some(env),
-        Stmt::Seq(v) => {
-            let mut intermediary = env;
-            for s in v {
-                intermediary = stmt_initializes(intermediary, s)?;
+impl<'input> Stmt<'input> {
+    /// Given an environment `env` and a statment `s`, returns a new environment `s'`
+    /// if `s` assigns only to variables in the scope of `env`, and uses only variables initialized in `env`,
+    /// leaving a resulting environment of `s'`.
+    fn initializes(&self, mut env: StmtEnv<'input>) -> Option<StmtEnv<'input>> {
+        match self {
+            Stmt::Nop => Some(env),
+            Stmt::Seq(v) => {
+                let mut intermediary = env;
+                for s in v {
+                    intermediary = s.initializes(intermediary)?;
+                }
+                Some(intermediary)
             }
-            Some(intermediary)
-        }
-        Stmt::Assign(Lvalue::Ident(x), e) => {
-            if env.inscope.contains_key(x) && exp_uses_only(e, &env.initialized)
-            {
-                env.initialized.insert(x);
-                Some(env)
-            } else {
-                //TODO: add verbose mode?
-                // more likely just add proper error types
-                /*
-                if !env.inscope.contains_key(x) {
-                    println!("assignment to variable not in scope");
+            Stmt::Assign(Lvalue::Ident(x), e) => {
+                if env.inscope.contains_key(x) && e.uses_only(&env.initialized)
+                {
+                    env.initialized.insert(x);
+                    Some(env)
                 } else {
-                    println!("assignment uses variables not yet initialized");
+                    //TODO: add verbose mode?
+                    // more likely just add proper error types
+                    /*
+                    if !env.inscope.contains_key(x) {
+                        println!("assignment to variable not in scope");
+                    } else {
+                        println!("assignment uses variables not yet initialized");
+                    }
+                    */
+                    None
                 }
-                */
-                None
             }
-        }
-        Stmt::Return(e) => {
-            if exp_uses_only(e, &env.initialized) {
-                env.initialized.drain();
-                for key in env.inscope.keys() {
-                    env.initialized.insert(key);
+            Stmt::Return(e) => {
+                if e.uses_only(&env.initialized) {
+                    env.initialized.drain();
+                    for key in env.inscope.keys() {
+                        env.initialized.insert(key);
+                    }
+                    Some(env)
+                } else {
+                    None
                 }
+            }
+            Stmt::Declare(x, t, scope) => {
+                // since double declares are not allowed, check that x is not already in scope
+                if env.inscope.contains_key(x) {
+                    // eprintln!("double declaration");
+                    return None;
+                }
+                env.inscope.insert(x, *t);
+                let mut new_env = scope.initializes(env)?;
+                new_env.inscope.remove(x);
+                new_env.initialized.remove(x);
+                Some(new_env)
+            }
+            Stmt::Exp(exp) => {
+                if exp.uses_only(&env.initialized) {
+                    Some(env)
+                } else {
+                    None
+                }
+            }
+            Stmt::If {
+                cond,
+                stmt_true,
+                stmt_false,
+            } => {
+                if !cond.uses_only(&env.initialized) {
+                    return None;
+                }
+
+                // at least one clone is necessary since "if" bodies may mutate the environment
+
+                // if we only use one clone, we need to clone the previous inscope anyway
+                // because we need to make sure that variables declared in the branches
+                // aren't in scope outside those branches
+                let env_true = stmt_true.initializes(env.clone())?;
+                let env_false = stmt_false.initializes(env.clone())?;
+
+                // note:
+                // right now code below is obvious in what it does, at the cost of some efficiency.
+                // cloning the intersection is possibly slow, especially when the two environments
+                // are about to go out of scope and be dropped anyway
+
+                Some(StmtEnv {
+                    initialized: env_true
+                        .initialized
+                        .intersection(&env_false.initialized)
+                        .cloned()
+                        .collect(),
+                    inscope: env.inscope,
+                })
+            }
+            Stmt::While { cond, body } => {
+                if !cond.uses_only(&env.initialized) {
+                    return None;
+                }
+
+                // clone is necessary since the while body may mutate the environment,
+                // but we only want it to mutate the local environment since the body
+                // may not be called
+                let _ = body.initializes(env.clone())?;
+
                 Some(env)
-            } else {
-                None
             }
-        }
-        Stmt::Declare(x, t, scope) => {
-            // since double declares are not allowed, check that x is not already in scope
-            if env.inscope.contains_key(x) {
-                // eprintln!("double declaration");
-                return None;
-            }
-            env.inscope.insert(x, *t);
-            let mut new_env = stmt_initializes(env, scope)?;
-            new_env.inscope.remove(x);
-            new_env.initialized.remove(x);
-            Some(new_env)
-        }
-        Stmt::Exp(exp) => {
-            if exp_uses_only(exp, &env.initialized) {
-                Some(env)
-            } else {
-                None
-            }
-        }
-        Stmt::If {
-            cond,
-            stmt_true,
-            stmt_false,
-        } => {
-            if !exp_uses_only(cond, &env.initialized) {
-                return None;
-            }
-
-            // at least one clone is necessary since "if" bodies may mutate the environment
-
-            // if we only use one clone, we need to clone the previous inscope anyway
-            // because we need to make sure that variables declared in the branches
-            // aren't in scope outside those branches
-            let env_true = stmt_initializes(env.clone(), stmt_true)?;
-            let env_false = stmt_initializes(env.clone(), stmt_false)?;
-
-            // note:
-            // right now code below is obvious in what it does, at the cost of some efficiency.
-            // cloning the intersection is possibly slow, especially when the two environments
-            // are about to go out of scope and be dropped anyway
-
-            Some(StmtEnv {
-                initialized: env_true
-                    .initialized
-                    .intersection(&env_false.initialized)
-                    .cloned()
-                    .collect(),
-                inscope: env.inscope,
-            })
-        }
-        Stmt::While { cond, body } => {
-            if !exp_uses_only(cond, &env.initialized) {
-                return None;
-            }
-
-            // clone is necessary since the while body may mutate the environment,
-            // but we only want it to mutate the local environment since the body
-            // may not be called
-            let _ = stmt_initializes(env.clone(), body)?;
-
-            Some(env)
         }
     }
 }
@@ -240,7 +394,7 @@ impl<'a> Program<'a> {
     /// the stack.
     /// Now this function uses heap space to keep track of `Frame`s, and manually recurses to
     /// save on stack space.
-    pub fn initialization_check(self: &'a Program<'a>) -> Result<(), ()> {
+    fn initialization_check_iterative(self: &'a Program<'a>) -> Result<(), ()> {
         let mut env = StmtEnv {
             initialized: HashSet::new(),
             inscope: HashMap::new(),
@@ -315,7 +469,7 @@ impl<'a> Program<'a> {
                     match (if_env, else_env) {
                         (New, New) => {
                             // check condition
-                            if !exp_uses_only(cond, &env.initialized) {
+                            if !cond.uses_only(&env.initialized) {
                                 return Err(());
                             }
 
@@ -367,7 +521,7 @@ impl<'a> Program<'a> {
                     };
                     match progress {
                         New => {
-                            if !exp_uses_only(cond, &env.initialized) {
+                            if !cond.uses_only(&env.initialized) {
                                 return Err(());
                             }
 
@@ -390,7 +544,7 @@ impl<'a> Program<'a> {
                     let Stmt::Exp(exp) = frame.statement else {
                         unreachable!()
                     };
-                    if !exp_uses_only(exp, &env.initialized) {
+                    if !exp.uses_only(&env.initialized) {
                         return Err(());
                     }
                 }
@@ -402,7 +556,7 @@ impl<'a> Program<'a> {
                         unreachable!()
                     };
                     if env.inscope.contains_key(name)
-                        && exp_uses_only(exp, &env.initialized)
+                        && exp.uses_only(&env.initialized)
                     {
                         env.initialized.insert(name);
                     } else {
@@ -413,7 +567,7 @@ impl<'a> Program<'a> {
                     let Stmt::Return(exp) = frame.statement else {
                         unreachable!()
                     };
-                    if exp_uses_only(exp, &env.initialized) {
+                    if exp.uses_only(&env.initialized) {
                         env.initialized.drain();
                         for key in env.inscope.keys() {
                             env.initialized.insert(key);
@@ -426,6 +580,22 @@ impl<'a> Program<'a> {
         }
 
         Ok(())
+    }
+
+    fn initialization_check_recursive(self: &'a Program<'a>) -> Result<(), ()> {
+        let env: StmtEnv = StmtEnv {
+            initialized: HashSet::new(),
+            inscope: HashMap::new(),
+        };
+        let stmt: &Stmt = self.as_ref();
+        match stmt.initializes(env) {
+            Some(_) => Ok(()),
+            None => Err(()),
+        }
+    }
+
+    pub fn initialization_check(self: &'a Program<'a>) -> Result<(), ()> {
+        self.initialization_check_iterative()
     }
 }
 

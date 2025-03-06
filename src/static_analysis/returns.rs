@@ -52,42 +52,64 @@ impl<'a> std::fmt::Debug for Frame<'a> {
     }
 }
 
-fn make_frame<'a>(s: &'a Stmt<'a>) -> Frame<'a> {
-    match s {
-        Stmt::Declare(_, _, scope) => Frame::Declare(scope),
-        Stmt::Assign(_, _) => Frame::Assign,
-        Stmt::Return(_) => Frame::Return,
-        Stmt::Seq(list) => Frame::Seq {
-            list,
-            next: 0,
-            any_returns: false,
-        },
-        Stmt::Nop => Frame::Nop,
-        Stmt::If {
-            cond: _,
-            stmt_true,
-            stmt_false,
-        } => Frame::If {
-            stmt_true,
-            return_true: New,
-            stmt_false,
-            return_false: New,
-        },
-        Stmt::While { .. } => Frame::While,
-        Stmt::Exp(_) => Frame::Exp,
+impl<'a> Frame<'a> {
+    fn new(s: &'a Stmt<'a>) -> Self {
+        match s {
+            Stmt::Declare(_, _, scope) => Frame::Declare(scope),
+            Stmt::Assign(_, _) => Frame::Assign,
+            Stmt::Return(_) => Frame::Return,
+            Stmt::Seq(list) => Frame::Seq {
+                list,
+                next: 0,
+                any_returns: false,
+            },
+            Stmt::Nop => Frame::Nop,
+            Stmt::If {
+                cond: _,
+                stmt_true,
+                stmt_false,
+            } => Frame::If {
+                stmt_true,
+                return_true: New,
+                stmt_false,
+                return_false: New,
+            },
+            Stmt::While { .. } => Frame::While,
+            Stmt::Exp(_) => Frame::Exp,
+        }
     }
 }
 
 impl<'a> Stmt<'a> {
-    fn return_check(self: &'a Stmt<'a>) -> bool {
+    fn return_check_recursive(self: &'a Stmt<'a>) -> bool {
+        match self {
+            Stmt::Declare(_, _, stmt) => stmt.return_check_recursive(),
+            Stmt::Assign(_, _) => false,
+            Stmt::Return(_) => true,
+            Stmt::Seq(seq) => seq.iter().any(|s| s.return_check_recursive()),
+            Stmt::Nop => false,
+            Stmt::If {
+                cond: _,
+                stmt_true,
+                stmt_false,
+            } => {
+                stmt_true.return_check_recursive()
+                    && stmt_false.return_check_recursive()
+            }
+            Stmt::While { .. } => false,
+            Stmt::Exp(_) => false,
+        }
+    }
+
+    fn return_check_iterative(self: &'a Stmt<'a>) -> bool {
         let mut stack: Vec<Frame> = Vec::new();
         let mut returns: bool = false;
 
-        stack.push(make_frame(self));
+        stack.push(Frame::new(self));
 
         while let Some(frame) = stack.pop() {
             match frame {
-                Frame::Declare(scope) => stack.push(make_frame(scope)),
+                Frame::Declare(scope) => stack.push(Frame::new(scope)),
                 Frame::Assign => returns = false,
                 Frame::Nop => returns = false,
                 Frame::Seq {
@@ -101,7 +123,7 @@ impl<'a> Stmt<'a> {
                             next: next + 1,
                             any_returns: any_returns || returns,
                         });
-                        stack.push(make_frame(&list[next]));
+                        stack.push(Frame::new(&list[next]));
                     } else {
                         returns |= any_returns;
                     }
@@ -121,7 +143,7 @@ impl<'a> Stmt<'a> {
                             stmt_false,
                             return_false: New,
                         });
-                        stack.push(make_frame(stmt_true));
+                        stack.push(Frame::new(stmt_true));
                     }
                     (InProgress, New) => {
                         stack.push(Frame::If {
@@ -130,7 +152,7 @@ impl<'a> Stmt<'a> {
                             stmt_false,
                             return_false: InProgress,
                         });
-                        stack.push(make_frame(stmt_false));
+                        stack.push(Frame::new(stmt_false));
                     }
                     (Done(if_returns), InProgress) => {
                         returns &= if_returns;
@@ -174,7 +196,7 @@ impl<'a> Program<'a> {
     /// to maintain the same behaviour while respecting the current
     /// return checker.
     pub fn return_check(self: &'a Program<'a>) -> Result<(), ()> {
-        if self.as_ref().return_check() {
+        if self.as_ref().return_check_iterative() {
             Ok(())
         } else {
             Err(())

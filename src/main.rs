@@ -130,101 +130,151 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    mod l1 {
-        use std::fs::{read_dir, read_to_string};
+    use std::{
+        fs::{read_dir, read_to_string},
+        sync::{Arc, Mutex},
+        thread,
+    };
 
-        use crate::compile;
+    use crate::compile;
+    #[derive(Debug)]
+    enum TestResult {
+        Return(i64), // compile and return value
+        DivZero,     // compile but raise divzero
+        Error,       // fail to compile
+    }
 
-        #[derive(Debug)]
-        enum TestResult {
-            Return(i64), // compile and return value
-            DivZero,     // compile but raise divzero
-            Error,       // fail to compile
-        }
+    fn get_test_result(contents: &str) -> Option<TestResult> {
+        // only needs first line
+        let line = contents.lines().next()?.trim();
 
-        fn get_test_result(contents: &str) -> Option<TestResult> {
-            // only needs first line
-            let line = contents.lines().next()?.trim();
-
-            if line.starts_with("//test return ") {
-                match line.strip_prefix("//test return ")?.parse::<i64>() {
-                    Ok(result) => Some(TestResult::Return(result)),
-                    Err(_) => None,
-                }
-            } else if line.starts_with("//test div-by-zero") {
-                Some(TestResult::DivZero)
-            } else if line.starts_with("//test error") {
-                Some(TestResult::Error)
-            } else {
-                None
+        if line.starts_with("//test return ") {
+            match line.strip_prefix("//test return ")?.parse::<i64>() {
+                Ok(result) => Some(TestResult::Return(result)),
+                Err(_) => None,
             }
+        } else if line.starts_with("//test div-by-zero") {
+            Some(TestResult::DivZero)
+        } else if line.starts_with("//test error") {
+            Some(TestResult::Error)
+        } else {
+            None
         }
+    }
 
-        fn test_file(file: String, path: &str, verbose: bool) -> bool {
-            let expected = get_test_result(&file).unwrap_or_else(|| {
-                panic!("test file {path} should have valid expected result")
-            });
+    fn test_file(file: String, path: &str, verbose: bool) -> bool {
+        let expected = get_test_result(&file).unwrap_or_else(|| {
+            panic!("test file {path} should have valid expected result")
+        });
 
-            // compile each file without verbose mode
-            let output = compile(
-                &file,
-                verbose,
-                crate::codegen::Target::AbstractAssembly,
+        // compile each file without verbose mode
+        let output =
+            compile(&file, verbose, crate::codegen::Target::AbstractAssembly);
+
+        if !match expected {
+            TestResult::Return(_) => output.is_ok(),
+            TestResult::Error => output.is_err(),
+            TestResult::DivZero => output.is_ok(),
+        } {
+            eprintln!(
+                "file {} did not pass: expected {:?}, got success result {}",
+                path,
+                expected,
+                output.is_ok(),
             );
-
-            if !match expected {
-                TestResult::Return(_) => output.is_ok(),
-                TestResult::Error => output.is_err(),
-                TestResult::DivZero => output.is_ok(),
-            } {
-                eprintln!(
-                    "file {} did not pass: expected {:?}, got success result {}",
-                    path,
-                    expected,
-                    output.is_ok(),
-                );
-                return false;
-            } else {
-                eprintln!("passed");
-            }
-
-            // TODO
-            // save to output file
-            // run output file
-            // test against expected output
-            // delete output file
-
-            true
+            return false;
+        } else {
+            eprintln!("passed");
         }
 
-        fn test_directory(path: &str) {
-            let files = read_dir(path).expect("testing directory should exist");
-            let mut failures: Vec<String> = Vec::new();
-            for entry in files {
-                let entry = entry.expect("test file should exist");
-                let path = entry.path();
-                let path_str = path.to_str().unwrap();
+        // TODO
+        // save to output file
+        // run output file
+        // test against expected output
+        // delete output file
 
-                eprint!("testing {path_str}...");
+        true
+    }
 
-                let file = match read_to_string(entry.path()) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        failures.push(path_str.to_string());
-                        return;
-                    }
-                };
+    fn test_directory(path: &str) {
+        let files = read_dir(path).expect("testing directory should exist");
+        let results = Arc::new(Mutex::new(Vec::new()));
 
-                if !test_file(file, path_str, false) {
-                    failures.push(path_str.to_string());
+        enum TestResult {
+            Success(String),
+            Failure(String),
+        }
+
+        let mut test_threads: Vec<_> = Vec::new();
+
+        for entry in files {
+            let entry = entry.expect("test file should exist");
+            let path = entry.path();
+            let path_str = path.to_str().unwrap().to_string();
+
+            eprint!("testing {path_str}...");
+
+            let file = match read_to_string(entry.path()) {
+                Ok(s) => s,
+                Err(_) => {
+                    results
+                        .lock()
+                        .unwrap()
+                        .push(TestResult::Failure(path_str.to_string()));
+                    continue;
+                }
+            };
+
+            let results = results.clone();
+
+            test_threads.push(thread::spawn(move || {
+                if !test_file(file, &path_str, false) {
+                    results
+                        .lock()
+                        .unwrap()
+                        .push(TestResult::Failure(path_str.to_string()));
+                } else {
+                    results
+                        .lock()
+                        .unwrap()
+                        .push(TestResult::Success(path_str.to_string()));
+                }
+            }));
+        }
+
+        for handle in test_threads {
+            match handle.join() {
+                Ok(()) => (),
+                Err(e) => {
+                    eprintln!("test panic: {:?}", e);
+                    panic!();
                 }
             }
+        }
 
-            eprintln!("failed tests:");
-            for test in failures {
-                eprintln!("- {test}");
+        let mut passed = 0;
+        let mut failed = 0;
+        for result in results.lock().unwrap().iter() {
+            match result {
+                TestResult::Success(_) => passed += 1,
+                TestResult::Failure(_) => failed += 1,
             }
         }
+
+        eprintln!(
+            "total tests: {}, tests passed: {}, tests failed: {}",
+            passed + failed,
+            passed,
+            failed,
+        );
+
+        if failed > 0 {
+            panic!();
+        }
+    }
+
+    mod l1 {
+        use super::*;
 
         #[test]
         fn basic() {
@@ -241,8 +291,9 @@ mod tests {
             // bellsprout-return02-l2.l1
             // simeonpoisson-randomizedlarge.l1
             // maryammirzakhani-chinese.l1
+            // kelen-success4.l1
 
-            let path = "tests/l1-large/maryammirzakhani-chinese.l1";
+            let path = "tests/l1-large/kelen-success4.l1";
             let file = read_to_string(path).unwrap();
 
             assert!(test_file(file, path, true));

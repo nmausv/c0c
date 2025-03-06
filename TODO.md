@@ -4,6 +4,15 @@
 # Global
 - [x] pretty print functionality
     uses `Display` trait
+- [x] update tests to spawn a thread for each test, to more accurately determine if stack overflows are a problem
+    - after update, stack overflows are completely gone, even for recursive implementations
+    - [?] switch back to regular, stack based recursion?
+        - [ ] elaboration
+        - [x] static analysis
+            - [x] initialization checks
+            - [x] type checks
+            - [x] return checks
+        - [x] IR translation
 
 # Front End
 
@@ -58,10 +67,10 @@
 
 # Static Semantics
 
-- [>] convert all recursive static semantics to iterative solutions
+- [x] convert all recursive static semantics to iterative solutions
     - [x] initialization check
-    - [ ] return check
-    - [ ] type check
+    - [x] return check
+    - [x] type check
 
 ## Initialization
 - [x] ensure variables are defined before being used, and `return`s define all and only variables currently in scope
@@ -105,6 +114,7 @@
 - [x] separate between commands (impure) and expressions (pure)
 - [>] decide whether to split into basic blocks now, or wait for a future iteration (L3?)
     - [x] for now, ignore the basic blocks, but revisit this when doing SSA conversion
+- [ ] convert translation to use heap based recursion, to avoid stack overflows
 - [>] tests
     - [ ] TODO
 

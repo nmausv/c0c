@@ -198,6 +198,8 @@ mod abs_asm_tests {
 
     use std::collections::HashMap;
 
+    use crate::{codegen::abstract_assembly::ir_to_abstract, temps::Label};
+
     use super::{Instruction, Operand};
 
     /// stores the instruction number that caused the error
@@ -205,6 +207,7 @@ mod abs_asm_tests {
     enum SimulationError {
         MoveIntoConst(usize),
         UninitializedVariable(usize),
+        UnknownLabel(Label),
     }
 
     /// returns Ok(Some(n)) if the instruction returns n, Ok(None) if the
@@ -212,14 +215,14 @@ mod abs_asm_tests {
     /// Err(..) if the instruction could not execute
     fn execute_abs_instruction(
         state: &mut HashMap<Operand, i32>,
-        instruction: &Instruction,
-        index: usize,
+        program: &[Instruction],
+        ip: &mut usize,
     ) -> Result<Option<i32>, SimulationError> {
-        match instruction {
+        match &program[*ip] {
             Instruction::Move {
                 d: Operand::IntConst(_),
                 s: _,
-            } => return Err(SimulationError::MoveIntoConst(index)),
+            } => Err(SimulationError::MoveIntoConst(*ip)),
             Instruction::Move {
                 d,
                 s: Operand::IntConst(n),
@@ -231,9 +234,7 @@ mod abs_asm_tests {
                 let stored_s = match state.get(s) {
                     Some(n) => *n,
                     None => {
-                        return Err(SimulationError::UninitializedVariable(
-                            index,
-                        ))
+                        return Err(SimulationError::UninitializedVariable(*ip))
                     }
                 };
                 state.insert(d.clone(), stored_s);
@@ -246,7 +247,7 @@ mod abs_asm_tests {
                         Some(n) => *n,
                         None => {
                             return Err(SimulationError::UninitializedVariable(
-                                index,
+                                *ip,
                             ))
                         }
                     },
@@ -257,7 +258,7 @@ mod abs_asm_tests {
                         Some(n) => *n,
                         None => {
                             return Err(SimulationError::UninitializedVariable(
-                                index,
+                                *ip,
                             ))
                         }
                     },
@@ -272,40 +273,113 @@ mod abs_asm_tests {
                     crate::frontend::ast::Binop::Modulo => {
                         stored_s1 % stored_s2
                     }
-                    _ => todo!("abstract assembly simulation"),
+                    _ => todo!("abstract assembly simulation: binops"),
                 };
 
                 state.insert(d.clone(), result);
                 Ok(None)
             }
-            Instruction::Return => {
-                return Ok(Some(
-                    *state
-                        .get(&Operand::Register(String::from("r_ret")))
-                        .expect(
-                            "program state should have the given value mapped",
-                        ),
-                ))
+            Instruction::Return => Ok(Some(
+                *state
+                    .get(&Operand::Register(String::from("r_ret")))
+                    .expect("program state should have the given value mapped"),
+            )),
+            Instruction::Unop { .. } => todo!(),
+            Instruction::If {
+                left,
+                comp,
+                right,
+                branch_true,
+                branch_false,
+            } => {
+                let left = match state.get(left) {
+                    Some(val) => val,
+                    None => {
+                        return Err(SimulationError::UninitializedVariable(*ip))
+                    }
+                };
+                let right = match state.get(right) {
+                    Some(val) => val,
+                    None => {
+                        return Err(SimulationError::UninitializedVariable(*ip))
+                    }
+                };
+                let branch_true = match program
+                    .iter()
+                    .position(|i| *i == Instruction::Label(branch_true.clone()))
+                {
+                    Some(ind) => ind,
+                    None => {
+                        return Err(SimulationError::UnknownLabel(
+                            branch_true.clone(),
+                        ));
+                    }
+                };
+                let branch_false = match program.iter().position(|i| {
+                    *i == Instruction::Label(branch_false.clone())
+                }) {
+                    Some(ind) => ind,
+                    None => {
+                        return Err(SimulationError::UnknownLabel(
+                            branch_false.clone(),
+                        ));
+                    }
+                };
+                // check condition satisfied
+                let sat = match comp {
+                    crate::frontend::ast::Binop::Less => left < right,
+                    crate::frontend::ast::Binop::LessEq => left <= right,
+                    crate::frontend::ast::Binop::Greater => left > right,
+                    crate::frontend::ast::Binop::GreaterEq => left >= right,
+                    crate::frontend::ast::Binop::Eq => left == right,
+                    crate::frontend::ast::Binop::NotEq => left != right,
+                    crate::frontend::ast::Binop::LogAnd => todo!(),
+                    crate::frontend::ast::Binop::LogOr => todo!(),
+                    _ => panic!(),
+                };
+
+                if sat {
+                    *ip = branch_true;
+                } else {
+                    *ip = branch_false;
+                }
+
+                Ok(None)
             }
-            _ => todo!("abstract assembly simulation"),
+            Instruction::Goto(label) => {
+                // find label in instructions
+                match program
+                    .iter()
+                    .position(|i| *i == Instruction::Label(label.clone()))
+                {
+                    Some(ind) => {
+                        *ip = ind;
+                        Ok(None)
+                    }
+                    None => Err(SimulationError::UnknownLabel(label.clone())),
+                }
+            }
+            Instruction::Label(_) => Ok(None),
         }
     }
 
     /// Executes the abstract assembly and returns the output (if any).
     /// Typechecker ensures all variables initialized before being used.
     fn abs_asm_runner(
-        program: &Vec<Instruction>,
+        program: &[Instruction],
     ) -> Result<Option<i32>, SimulationError> {
         let mut state: HashMap<Operand, i32> = HashMap::new();
+        let mut ip = 0;
 
-        for (index, instruction) in program.iter().enumerate() {
-            dbg!(instruction);
-            dbg!(&state);
-            match execute_abs_instruction(&mut state, instruction, index) {
-                Ok(Some(n)) => return Ok(Some(n)),
-                Ok(None) => (), // continue execution until return
-                err => return err,
+        loop {
+            if ip >= program.len() {
+                break;
+            }
+            let result = execute_abs_instruction(&mut state, program, &mut ip)?;
+            if let Some(n) = result {
+                return Ok(Some(n));
             };
+            ip += 1;
         }
 
         Ok(None)
@@ -364,5 +438,28 @@ mod abs_asm_tests {
         let result = abs_asm_runner(&program);
         dbg!(&result);
         assert_eq!(result, Ok(Some(1)));
+    }
+
+    #[test]
+    fn end_to_end() {
+        use crate::frontend::c0parser::ProgramParser;
+        use crate::frontend::elaboration;
+        use crate::frontend::lexer::Lexer;
+        use crate::temps::TempFactory;
+        use crate::translation;
+
+        let program = "int main() {bool x = false; bool y = true; bool z = x ? x && y : x || y; return z ? 1 : 0;}";
+        let lexer = Lexer::new_c0c_lexer(program);
+        let parser = ProgramParser::new();
+        let ast = parser.parse(program, lexer).unwrap();
+        let elab = elaboration::elaborate(ast).unwrap();
+        let mut tf = TempFactory::new();
+        let ir = translation::translate(elab, &mut tf);
+        let commands = ir_to_abstract(ir, &mut tf);
+
+        match abs_asm_runner(&commands) {
+            Ok(Some(1)) => (),
+            _ => panic!("unexpected simulation result"),
+        }
     }
 }
