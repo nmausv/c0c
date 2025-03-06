@@ -447,7 +447,7 @@ mod tests {
         let program: Program =
             Stmt::Declare("x", Type::Int, Box::new(Stmt::Return(Exp::Num(0))))
                 .into();
-        assert!((&program).initialization_check().is_ok());
+        assert!(program.initialization_check().is_ok());
     }
 
     #[test]
@@ -457,7 +457,7 @@ mod tests {
             Stmt::Return(Exp::Num(0)),
         ]))
         .into();
-        assert!((&program).initialization_check().is_err());
+        assert!(program.initialization_check().is_err());
     }
 
     #[test]
@@ -467,7 +467,7 @@ mod tests {
             Stmt::Assign("x".into(), Exp::Lvalue("x".into())),
         ]))
         .into();
-        assert!((&program).initialization_check().is_err());
+        assert!(program.initialization_check().is_err());
     }
 
     #[test]
@@ -481,7 +481,7 @@ mod tests {
             ]))),
         )
         .into();
-        assert!((&program).initialization_check().is_ok());
+        assert!(program.initialization_check().is_ok());
     }
 
     #[test]
@@ -498,7 +498,7 @@ mod tests {
             ),
         ]))
         .into();
-        assert!((&program).initialization_check().is_ok());
+        assert!(program.initialization_check().is_ok());
     }
 
     #[test]
@@ -519,7 +519,7 @@ mod tests {
             ]))),
         )
         .into();
-        assert!((&program_noscope).initialization_check().is_err());
+        assert!(program_noscope.initialization_check().is_err());
 
         // VALID
         // int main() {{int x = 0;} int x = 1; x = x;}
@@ -539,6 +539,6 @@ mod tests {
             ),
         ]))
         .into();
-        assert!((&program_scope).initialization_check().is_ok());
+        assert!(program_scope.initialization_check().is_ok());
     }
 }
