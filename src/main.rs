@@ -292,11 +292,14 @@ mod tests {
             // simeonpoisson-randomizedlarge.l1
             // maryammirzakhani-chinese.l1
             // kelen-success4.l1
+            // beorn-ret_negation.l1
 
             let path = "tests/l1-large/kelen-success4.l1";
             let file = read_to_string(path).unwrap();
 
-            assert!(test_file(file, path, true));
+            thread::spawn(|| assert!(test_file(file, path, true)))
+                .join()
+                .unwrap()
         }
     }
 }
