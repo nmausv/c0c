@@ -50,6 +50,12 @@ impl<'input> From<Program<'input>> for Stmt<'input> {
     }
 }
 
+impl<'input> Default for Stmt<'input> {
+    fn default() -> Self {
+        Self::Nop
+    }
+}
+
 impl<'input> std::fmt::Display for Stmt<'input> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -100,6 +106,12 @@ pub enum Exp<'input> {
         exp_true: Box<Exp<'input>>,
         exp_false: Box<Exp<'input>>,
     },
+}
+
+impl<'input> Default for Exp<'input> {
+    fn default() -> Self {
+        Self::False
+    }
 }
 
 impl<'input> From<Lvalue<'input>> for Exp<'input> {
