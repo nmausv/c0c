@@ -1,6 +1,6 @@
 #[derive(Debug)]
-pub enum FrameProgress<T> {
-    New,
+pub enum FrameProgress<S, T> {
+    New(S),
     InProgress,
     Done(T),
 }

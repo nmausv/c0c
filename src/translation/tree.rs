@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::frontend::elab_ast::{Binop, ImpureBinop, PureBinop, Unop};
 
 use crate::temps::Label;
@@ -74,7 +76,7 @@ impl std::fmt::Display for Command {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PureExp {
     Num(i32),
-    Ident(String),
+    Ident(Rc<str>),
     PureBinop(Box<PureExp>, PureBinop, Box<PureExp>),
     Unop(Unop, Box<PureExp>),
 }

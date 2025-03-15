@@ -13,7 +13,7 @@ pub fn check(elab_program: &elab_ast::Program) -> bool {
         return false;
     }
 
-    if elab_program.typecheck().is_err() {
+    if elab_program.type_check().is_err() {
         return false;
     }
 

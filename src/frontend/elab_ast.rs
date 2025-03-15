@@ -50,6 +50,8 @@ impl<'input> From<Program<'input>> for Stmt<'input> {
     }
 }
 
+// acceptable to have a `default` statement, only because `nop` exists,
+// no similar acceptable expression exists
 impl<'input> Default for Stmt<'input> {
     fn default() -> Self {
         Self::Nop
@@ -106,12 +108,6 @@ pub enum Exp<'input> {
         exp_true: Box<Exp<'input>>,
         exp_false: Box<Exp<'input>>,
     },
-}
-
-impl<'input> Default for Exp<'input> {
-    fn default() -> Self {
-        Self::False
-    }
 }
 
 impl<'input> From<Lvalue<'input>> for Exp<'input> {

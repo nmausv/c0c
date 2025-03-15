@@ -1,9 +1,8 @@
-
 pub enum Target {
     AbstractAssembly,
     ARM,
     LLVM,
-    x86_64
+    x86_64,
 }
 
 mod abstract_assembly;
@@ -15,17 +14,16 @@ pub fn codegen(
     target: Target,
     tf: &mut crate::temps::TempFactory,
 ) -> String {
+    let instructions = abstract_assembly::ir_to_abstract(ir, tf);
+
     match target {
-        Target::AbstractAssembly => {
-            let instructions = abstract_assembly::ir_to_abstract(ir, tf);
-            instructions
-                .into_iter()
-                .map(|i| match i {
-                    abstract_assembly::Instruction::Label(_) => format!("{i} "),
-                    _ => format!("{i}\n"),
-                })
-                .collect()
-        }
+        Target::AbstractAssembly => instructions
+            .into_iter()
+            .map(|i| match i {
+                abstract_assembly::Instruction::Label(_) => format!("{i} "),
+                _ => format!("{i}\n"),
+            })
+            .collect(),
         Target::ARM => todo!(),
         Target::LLVM => todo!(),
         Target::x86_64 => todo!(),

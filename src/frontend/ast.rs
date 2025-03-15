@@ -106,12 +106,6 @@ pub enum Exp<'input> {
     },
 }
 
-impl<'input> Default for Exp<'input> {
-    fn default() -> Self {
-        Self::False
-    }
-}
-
 impl<'input> std::fmt::Display for Exp<'input> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

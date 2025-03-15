@@ -15,21 +15,16 @@ enum ExpFrame<'a> {
     False,
     Lvalue(Lvalue<'a>),
     Binop {
-        left: &'a Exp<'a>,
-        left_progress: FrameProgress<()>,
-        right: &'a Exp<'a>,
-        right_progress: FrameProgress<()>,
+        left: FrameProgress<&'a Exp<'a>, ()>,
+        right: FrameProgress<&'a Exp<'a>, ()>,
     },
     Unop {
         exp: &'a Exp<'a>,
     },
     Ternary {
-        cond: &'a Exp<'a>,
-        cond_progress: FrameProgress<()>,
-        true_exp: &'a Exp<'a>,
-        true_progress: FrameProgress<()>,
-        false_exp: &'a Exp<'a>,
-        false_progress: FrameProgress<()>,
+        cond: FrameProgress<&'a Exp<'a>, ()>,
+        true_exp: FrameProgress<&'a Exp<'a>, ()>,
+        false_exp: FrameProgress<&'a Exp<'a>, ()>,
     },
 }
 
@@ -40,10 +35,8 @@ impl<'a> From<&'a Exp<'a>> for ExpFrame<'a> {
             Exp::Lvalue(lvalue) => Self::Lvalue(*lvalue),
             Exp::PureBinop(left, _, right)
             | Exp::ImpureBinop(left, _, right) => Self::Binop {
-                left,
-                left_progress: New,
-                right,
-                right_progress: New,
+                left: New(left),
+                right: New(right),
             },
             Exp::Unop(_, exp) => Self::Unop { exp },
             Exp::True => Self::True,
@@ -53,12 +46,9 @@ impl<'a> From<&'a Exp<'a>> for ExpFrame<'a> {
                 exp_true,
                 exp_false,
             } => Self::Ternary {
-                cond,
-                cond_progress: New,
-                true_exp: exp_true,
-                true_progress: New,
-                false_exp: exp_false,
-                false_progress: New,
+                cond: New(cond),
+                true_exp: New(exp_true),
+                false_exp: New(exp_false),
             },
         }
     }
@@ -80,76 +70,55 @@ impl<'input> Exp<'input> {
                 ExpFrame::Unop { exp } => {
                     stack.push(exp.into());
                 }
-                ExpFrame::Binop {
-                    left,
-                    left_progress,
-                    right,
-                    right_progress,
-                } => match (left_progress, right_progress) {
-                    (New, New) => {
+                ExpFrame::Binop { left, right } => match (left, right) {
+                    (New(left), New(right)) => {
                         stack.push(ExpFrame::Binop {
-                            left,
-                            left_progress: InProgress,
-                            right,
-                            right_progress: New,
+                            left: InProgress,
+                            right: New(right),
                         });
                         stack.push(left.into());
                     }
-                    (InProgress, New) => {
+                    (InProgress, New(right)) => {
                         stack.push(ExpFrame::Binop {
-                            left,
-                            left_progress: Done(()),
-                            right,
-                            right_progress: InProgress,
+                            left: Done(()),
+                            right: InProgress,
                         });
                         stack.push(right.into());
                     }
-                    (Done(_), InProgress) => {}
+                    (Done(()), InProgress) => {}
                     _ => unreachable!(),
                 },
                 ExpFrame::Ternary {
                     cond,
-                    cond_progress,
                     true_exp,
-                    true_progress,
                     false_exp,
-                    false_progress,
-                } => match (cond_progress, true_progress, false_progress) {
-                    (New, New, New) => {
+                } => match (cond, true_exp, false_exp) {
+                    (New(cond), New(true_exp), New(false_exp)) => {
                         stack.push(ExpFrame::Ternary {
-                            cond,
-                            cond_progress: InProgress,
-                            true_exp,
-                            true_progress: New,
-                            false_exp,
-                            false_progress: New,
+                            cond: InProgress,
+                            true_exp: New(true_exp),
+                            false_exp: New(false_exp),
                         });
                         stack.push(cond.into());
                     }
-                    (InProgress, New, New) => {
+                    (InProgress, New(true_exp), New(false_exp)) => {
                         stack.push(ExpFrame::Ternary {
-                            cond,
-                            cond_progress: Done(()),
-                            true_exp,
-                            true_progress: InProgress,
-                            false_exp,
-                            false_progress: New,
+                            cond: Done(()),
+                            true_exp: InProgress,
+                            false_exp: New(false_exp),
                         });
                         stack.push(true_exp.into());
                     }
-                    (Done(_), InProgress, New) => {
+                    (Done(()), InProgress, New(false_exp)) => {
                         stack.push(ExpFrame::Ternary {
-                            cond,
-                            cond_progress: Done(()),
-                            true_exp,
-                            true_progress: Done(()),
-                            false_exp,
-                            false_progress: InProgress,
+                            cond: Done(()),
+                            true_exp: Done(()),
+                            false_exp: InProgress,
                         });
                         stack.push(false_exp.into());
                     }
-                    (Done(_), Done(_), InProgress) => {}
-                    _ => todo!(),
+                    (Done(()), Done(()), InProgress) => {}
+                    _ => unreachable!(),
                 },
             }
         }
@@ -183,7 +152,7 @@ impl<'input> Exp<'input> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct StmtEnv<'input> {
     initialized: VarSet<'input>,
     inscope: TypeMap<'input>,
@@ -298,32 +267,39 @@ impl<'input> Stmt<'input> {
     }
 }
 
-enum FrameKind<'input> {
+#[derive(Debug)]
+enum Frame<'input, 'frame> {
     Seq {
         list: &'input VecDeque<Stmt<'input>>,
         next: usize,
     },
     Declare {
-        progress: FrameProgress<()>,
+        name: Ident<'input>,
+        t: Type,
+        scope: FrameProgress<&'frame Stmt<'input>, ()>,
     },
     If {
         environ: StmtEnv<'input>,
-        if_env: FrameProgress<Box<StmtEnv<'input>>>,
-        else_env: FrameProgress<Box<StmtEnv<'input>>>,
+        cond: &'frame Exp<'input>,
+        if_branch: FrameProgress<&'frame Stmt<'input>, Box<StmtEnv<'input>>>,
+        else_branch: FrameProgress<&'frame Stmt<'input>, Box<StmtEnv<'input>>>,
     },
     While {
-        progress: FrameProgress<()>,
+        cond: &'frame Exp<'input>,
+        body: FrameProgress<&'frame Stmt<'input>, ()>,
         environ: StmtEnv<'input>,
     },
-    Assign,
-    Return,
+    Assign {
+        lval: &'frame Lvalue<'input>,
+        exp: &'frame Exp<'input>,
+    },
+    Return {
+        exp: &'frame Exp<'input>,
+    },
     Nop,
-    Exp,
-}
-
-struct Frame<'input, 'frame> {
-    statement: &'frame Stmt<'input>,
-    kind: FrameKind<'input>,
+    Exp {
+        exp: &'frame Exp<'input>,
+    },
 }
 
 fn make_frame<'input, 'parent, 'frame>(
@@ -335,45 +311,31 @@ where
     'parent: 'frame,
 {
     match s {
-        Stmt::Declare(_, _, _) => Frame {
-            statement: s,
-            kind: FrameKind::Declare { progress: New },
+        Stmt::Declare(name, t, scope) => Frame::Declare {
+            name,
+            t: *t,
+            scope: New(scope),
         },
-        Stmt::Assign(_, _) => Frame {
-            statement: s,
-            kind: FrameKind::Assign,
+        Stmt::Assign(lval, exp) => Frame::Assign { lval, exp },
+        Stmt::Return(exp) => Frame::Return { exp },
+        Stmt::Seq(seq) => Frame::Seq { list: seq, next: 0 },
+        Stmt::Nop => Frame::Nop,
+        Stmt::If {
+            cond,
+            stmt_true,
+            stmt_false,
+        } => Frame::If {
+            environ: env.clone(),
+            cond,
+            if_branch: New(stmt_true),
+            else_branch: New(stmt_false),
         },
-        Stmt::Return(_) => Frame {
-            statement: s,
-            kind: FrameKind::Return,
+        Stmt::While { cond, body } => Frame::While {
+            cond,
+            body: New(body),
+            environ: env.clone(),
         },
-        Stmt::Seq(seq) => Frame {
-            statement: s,
-            kind: FrameKind::Seq { list: seq, next: 0 },
-        },
-        Stmt::Nop => Frame {
-            statement: s,
-            kind: FrameKind::Nop,
-        },
-        Stmt::If { .. } => Frame {
-            statement: s,
-            kind: FrameKind::If {
-                environ: env.clone(),
-                if_env: FrameProgress::New,
-                else_env: FrameProgress::New,
-            },
-        },
-        Stmt::While { .. } => Frame {
-            statement: s,
-            kind: FrameKind::While {
-                progress: New,
-                environ: env.clone(),
-            },
-        },
-        Stmt::Exp(_) => Frame {
-            statement: s,
-            kind: FrameKind::Exp,
-        },
+        Stmt::Exp(exp) => Frame::Exp { exp },
     }
 }
 
@@ -404,13 +366,13 @@ impl<'a> Program<'a> {
         stack.push(make_frame(self.as_ref(), &env));
 
         while let Some(mut frame) = stack.pop() {
-            match frame.kind {
-                FrameKind::Seq { list, next } => {
+            match frame {
+                Frame::Seq { list, next } => {
                     if next < list.len() {
                         // get child statement
                         let child_stmt = &list[next];
                         // modify parent
-                        frame.kind = FrameKind::Seq {
+                        frame = Frame::Seq {
                             list,
                             next: next + 1,
                         };
@@ -421,21 +383,21 @@ impl<'a> Program<'a> {
                         stack.push(child_frame);
                     }
                 }
-                FrameKind::Declare { progress } => {
-                    let Stmt::Declare(name, t, scope) = frame.statement else {
-                        unreachable!()
-                    };
-                    match progress {
-                        New => {
+                Frame::Declare { name, t, scope } => {
+                    match scope {
+                        New(scope) => {
                             // check double declare
                             if env.inscope.contains_key(name) {
                                 return Err(());
                             }
-                            env.inscope.insert(name, *t);
+                            env.inscope.insert(name, t);
 
                             // mark as done
-                            frame.kind =
-                                FrameKind::Declare { progress: Done(()) };
+                            frame = Frame::Declare {
+                                name,
+                                t,
+                                scope: Done(()),
+                            };
 
                             // push modified parent
                             stack.push(frame);
@@ -453,33 +415,27 @@ impl<'a> Program<'a> {
                         }
                     }
                 }
-                FrameKind::If {
+                Frame::If {
                     environ,
-                    if_env,
-                    else_env,
+                    cond,
+                    if_branch,
+                    else_branch,
                 } => {
-                    let Stmt::If {
-                        cond,
-                        stmt_true,
-                        stmt_false,
-                    } = frame.statement
-                    else {
-                        unreachable!()
-                    };
-                    match (if_env, else_env) {
-                        (New, New) => {
+                    match (if_branch, else_branch) {
+                        (New(if_branch), New(else_branch)) => {
                             // check condition
                             if !cond.uses_only(&env.initialized) {
                                 return Err(());
                             }
 
                             // create if child frame, mark as in progress
-                            frame.kind = FrameKind::If {
+                            frame = Frame::If {
                                 environ,
-                                if_env: InProgress,
-                                else_env: New,
+                                cond,
+                                if_branch: InProgress,
+                                else_branch: New(else_branch),
                             };
-                            let if_frame = make_frame(stmt_true, &env);
+                            let if_frame = make_frame(if_branch, &env);
 
                             // push modified parent
                             stack.push(frame);
@@ -487,17 +443,18 @@ impl<'a> Program<'a> {
                             // push child frame to stack
                             stack.push(if_frame);
                         }
-                        (InProgress, New) => {
+                        (InProgress, New(else_branch)) => {
                             // store if environment, mark as done
                             // mark else frame as in progress
-                            frame.kind = FrameKind::If {
+                            frame = Frame::If {
                                 environ,
-                                if_env: Done(Box::new(env.clone())),
-                                else_env: New,
+                                cond,
+                                if_branch: Done(Box::new(env.clone())),
+                                else_branch: InProgress,
                             };
 
                             // make child frame
-                            let else_frame = make_frame(stmt_false, &env);
+                            let else_frame = make_frame(else_branch, &env);
 
                             // push modified parent
                             stack.push(frame);
@@ -515,21 +472,24 @@ impl<'a> Program<'a> {
                         _ => unreachable!(),
                     }
                 }
-                FrameKind::While { environ, progress } => {
-                    let Stmt::While { cond, body } = frame.statement else {
-                        unreachable!()
-                    };
-                    match progress {
-                        New => {
+                Frame::While {
+                    cond,
+                    body,
+                    environ,
+                } => {
+                    match body {
+                        New(body) => {
                             if !cond.uses_only(&env.initialized) {
                                 return Err(());
                             }
 
                             // mark as Done
-                            frame.kind = FrameKind::While {
-                                progress: Done(()),
+                            frame = Frame::While {
+                                cond,
+                                body: InProgress,
                                 environ,
                             };
+                            stack.push(frame);
 
                             // push child
                             stack.push(make_frame(body, &env));
@@ -540,21 +500,14 @@ impl<'a> Program<'a> {
                         }
                     }
                 }
-                FrameKind::Exp => {
-                    let Stmt::Exp(exp) = frame.statement else {
-                        unreachable!()
-                    };
+                Frame::Exp { exp } => {
                     if !exp.uses_only(&env.initialized) {
                         return Err(());
                     }
                 }
-                FrameKind::Nop => (),
-                FrameKind::Assign => {
-                    let Stmt::Assign(Lvalue::Ident(name), exp) =
-                        frame.statement
-                    else {
-                        unreachable!()
-                    };
+                Frame::Nop => (),
+                Frame::Assign { lval, exp } => {
+                    let Lvalue::Ident(name) = lval;
                     if env.inscope.contains_key(name)
                         && exp.uses_only(&env.initialized)
                     {
@@ -563,10 +516,7 @@ impl<'a> Program<'a> {
                         return Err(());
                     }
                 }
-                FrameKind::Return => {
-                    let Stmt::Return(exp) = frame.statement else {
-                        unreachable!()
-                    };
+                Frame::Return { exp } => {
                     if exp.uses_only(&env.initialized) {
                         env.initialized.drain();
                         for key in env.inscope.keys() {

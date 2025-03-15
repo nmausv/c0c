@@ -6,8 +6,10 @@
     uses `Display` trait
 - [x] update tests to spawn a thread for each test, to more accurately determine if stack overflows are a problem
     - after update, stack overflows are completely gone, even for recursive implementations
-    - [?] switch back to regular, stack based recursion?
+        turns out, this was a bug in the testing framework, where any test error was indicating that every test succeeded
+    - [x] keep stack based recursion, stack overflows are still a problem after fixing the framework bug
         - [ ] elaboration
+            - need to handle `Block`s as individual statements, cannot append blocks together
         - [x] static analysis
             - [x] initialization checks
             - [x] type checks
@@ -119,6 +121,8 @@
     - [ ] TODO
 
 # Code Generation
+
+- [ ] actually generate ARM code for the L1 tests, so that the test harness can actually confirm that each test passed
 
 ## Abstract Assembly
 - [x] write a lightweight runner to allow end to end testing

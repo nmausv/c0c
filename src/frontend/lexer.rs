@@ -271,7 +271,7 @@ impl<'input> Lexer<'input> {
         let patterns: Vec<Lexeme> = vec![
             // Whitespace
             Lexeme::new(
-                RegExp::from_charlist(" \t\r"),
+                RegExp::from_charlist(" \t\r"),
                 TokenType::WHITESPACE,
                 default_priority,
             ),
@@ -582,7 +582,7 @@ impl<'input> Iterator for Lexer<'input> {
         loop {
             if self.consumed >= self.input.len() {
                 if let Some(location) = self.multi_comment_starts.pop() {
-                    eprintln!("unclosed start comment");
+                    // eprintln!("unclosed start comment");
                     return Some(Err(LexerError::UnclosedStartComment {
                         line: location.line,
                         col: location.column,
@@ -922,5 +922,22 @@ mod lexer_tests {
             .expect_err(""),
             LexerError::UnopenedEndComment { line: 5, col: 1 }
         );
+    }
+
+    #[test]
+    fn whitespace() {
+        let lexer = Lexer::new_c0c_lexer(
+            "//test return 42
+
+int main() {
+	int a =-10;
+  int b =-2;
+  
+  int c = 2 * a * b;
+  return c - b;
+}
+",
+        );
+        let _ = lexer.tokenize().expect("should be valid program");
     }
 }

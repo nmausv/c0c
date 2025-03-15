@@ -16,31 +16,23 @@ enum ExpFrame<'a> {
     False,
     Lvalue(Lvalue<'a>),
     PureBinop {
-        left: &'a Exp<'a>,
-        left_type: FrameProgress<Type>,
+        left: FrameProgress<&'a Exp<'a>, Type>,
         op: PureBinop,
-        right: &'a Exp<'a>,
-        right_type: FrameProgress<Type>,
+        right: FrameProgress<&'a Exp<'a>, Type>,
     },
     ImpureBinop {
-        left: &'a Exp<'a>,
-        left_type: FrameProgress<Type>,
+        left: FrameProgress<&'a Exp<'a>, Type>,
         op: ImpureBinop,
-        right: &'a Exp<'a>,
-        right_type: FrameProgress<Type>,
+        right: FrameProgress<&'a Exp<'a>, Type>,
     },
     Unop {
         op: Unop,
-        exp: &'a Exp<'a>,
-        exp_type: FrameProgress<Type>,
+        exp: FrameProgress<&'a Exp<'a>, ()>,
     },
     Ternary {
-        cond: &'a Exp<'a>,
-        cond_type: FrameProgress<Type>,
-        true_exp: &'a Exp<'a>,
-        true_type: FrameProgress<Type>,
-        false_exp: &'a Exp<'a>,
-        false_type: FrameProgress<Type>,
+        cond: FrameProgress<&'a Exp<'a>, ()>,
+        true_exp: FrameProgress<&'a Exp<'a>, Type>,
+        false_exp: FrameProgress<&'a Exp<'a>, Type>,
     },
 }
 
@@ -50,23 +42,18 @@ impl<'a> From<&'a Exp<'a>> for ExpFrame<'a> {
             Exp::Num(_) => Self::Num,
             Exp::Lvalue(lvalue) => Self::Lvalue(*lvalue),
             Exp::PureBinop(left, pure_binop, right) => Self::PureBinop {
-                left,
-                left_type: New,
+                left: New(left),
                 op: *pure_binop,
-                right,
-                right_type: New,
+                right: New(right),
             },
             Exp::ImpureBinop(left, impure_binop, right) => Self::ImpureBinop {
-                left,
-                left_type: New,
+                left: New(left),
                 op: *impure_binop,
-                right,
-                right_type: New,
+                right: New(right),
             },
             Exp::Unop(unop, exp) => Self::Unop {
                 op: *unop,
-                exp,
-                exp_type: New,
+                exp: New(exp),
             },
             Exp::True => Self::True,
             Exp::False => Self::False,
@@ -75,12 +62,9 @@ impl<'a> From<&'a Exp<'a>> for ExpFrame<'a> {
                 exp_true,
                 exp_false,
             } => Self::Ternary {
-                cond,
-                cond_type: New,
-                true_exp: exp_true,
-                true_type: New,
-                false_exp: exp_false,
-                false_type: New,
+                cond: New(cond),
+                true_exp: New(exp_true),
+                false_exp: New(exp_false),
             },
         }
     }
@@ -177,7 +161,7 @@ impl Exp<'_> {
                 }
             }
             exp => {
-                panic!("unexpected expression in typecheck: {:?}", exp)
+                panic!("unexpected expression in type_check: {:?}", exp)
             }
         }
     }
@@ -204,107 +188,90 @@ impl Exp<'_> {
                         None => return Err(()),
                     }
                 }
-                ExpFrame::PureBinop {
-                    left,
-                    left_type,
-                    op,
-                    right,
-                    right_type,
-                } => match (left_type, right_type) {
-                    (New, New) => {
-                        stack.push(ExpFrame::PureBinop {
-                            left,
-                            left_type: InProgress,
-                            op,
-                            right,
-                            right_type: New,
-                        });
-                        stack.push(ExpFrame::from(left));
+                ExpFrame::PureBinop { left, op, right } => {
+                    match (left, right) {
+                        (New(left), New(right)) => {
+                            stack.push(ExpFrame::PureBinop {
+                                left: InProgress,
+                                op,
+                                right: New(right),
+                            });
+                            stack.push(ExpFrame::from(left));
+                        }
+                        (InProgress, New(right)) => {
+                            stack.push(ExpFrame::PureBinop {
+                                left: Done(t),
+                                op,
+                                right: InProgress,
+                            });
+                            stack.push(ExpFrame::from(right));
+                        }
+                        (Done(left_type), InProgress) => match op.signature() {
+                            OpType::Relational => {
+                                if left_type == Type::Int && t == Type::Int {
+                                    t = Type::Bool;
+                                } else {
+                                    return Err(());
+                                }
+                            }
+                            OpType::Equality => {
+                                if left_type == t {
+                                    t = Type::Bool;
+                                } else {
+                                    return Err(());
+                                }
+                            }
+                            OpType::Logical => {
+                                if left_type == Type::Bool && t == Type::Bool {
+                                    t = Type::Bool;
+                                } else {
+                                    return Err(());
+                                }
+                            }
+                            OpType::Arithmetic => {
+                                if left_type == Type::Int && t == Type::Int {
+                                    t = Type::Int;
+                                } else {
+                                    return Err(());
+                                }
+                            }
+                        },
+                        _ => unreachable!(),
                     }
-                    (InProgress, New) => {
-                        stack.push(ExpFrame::PureBinop {
-                            left,
-                            left_type: Done(t),
-                            op,
-                            right,
-                            right_type: InProgress,
-                        });
-                        stack.push(ExpFrame::from(right));
-                    }
-                    (Done(left_type), InProgress) => match op.signature() {
-                        OpType::Relational => {
-                            if left_type == Type::Int && t == Type::Int {
-                                t = Type::Bool;
-                            } else {
-                                return Err(());
-                            }
+                }
+                ExpFrame::ImpureBinop { left, op, right } => {
+                    match (left, right) {
+                        (New(left), New(right)) => {
+                            stack.push(ExpFrame::ImpureBinop {
+                                left: InProgress,
+                                op,
+                                right: New(right),
+                            });
+                            stack.push(ExpFrame::from(left));
                         }
-                        OpType::Equality => {
-                            if left_type == t {
-                                t = Type::Bool;
-                            } else {
-                                return Err(());
-                            }
+                        (InProgress, New(right)) => {
+                            stack.push(ExpFrame::ImpureBinop {
+                                left: Done(t),
+                                op,
+                                right: InProgress,
+                            });
+                            stack.push(ExpFrame::from(right));
                         }
-                        OpType::Logical => {
-                            if left_type == Type::Bool && t == Type::Bool {
-                                t = Type::Bool;
-                            } else {
-                                return Err(());
-                            }
-                        }
-                        OpType::Arithmetic => {
+                        (Done(left_type), InProgress) => {
                             if left_type == Type::Int && t == Type::Int {
                                 t = Type::Int;
                             } else {
                                 return Err(());
                             }
                         }
-                    },
-                    _ => unreachable!(),
-                },
-                ExpFrame::ImpureBinop {
-                    left,
-                    left_type,
-                    op,
-                    right,
-                    right_type,
-                } => match (left_type, right_type) {
-                    (New, New) => {
-                        stack.push(ExpFrame::ImpureBinop {
-                            left,
-                            left_type: InProgress,
-                            op,
-                            right,
-                            right_type: New,
-                        });
-                        stack.push(ExpFrame::from(left));
+                        _ => unreachable!(),
                     }
-                    (InProgress, New) => {
-                        stack.push(ExpFrame::ImpureBinop {
-                            left,
-                            left_type: Done(t),
-                            op,
-                            right,
-                            right_type: InProgress,
-                        });
-                        stack.push(ExpFrame::from(right));
-                    }
-                    (Done(left_type), InProgress) => {
-                        if left_type == Type::Int && t == Type::Int {
-                            t = Type::Int;
-                        } else {
-                            return Err(());
-                        }
-                    }
-                    _ => unreachable!(),
-                },
-                ExpFrame::Unop { op, exp, exp_type } => match exp_type {
-                    New => {
+                }
+                ExpFrame::Unop { op, exp } => match exp {
+                    New(exp) => {
                         stack.push(ExpFrame::Unop {
                             op,
-                            exp,
-                            exp_type: InProgress,
+                            exp: InProgress,
                         });
                         stack.push(ExpFrame::from(exp));
                     }
@@ -322,53 +289,41 @@ impl Exp<'_> {
                             }
                         }
                     },
-                    Done(_) => unreachable!(),
+                    Done(()) => unreachable!(),
                 },
                 ExpFrame::Ternary {
                     cond,
-                    cond_type,
                     true_exp,
-                    true_type,
                     false_exp,
-                    false_type,
-                } => match (cond_type, true_type, false_type) {
-                    (New, New, New) => {
+                } => match (cond, true_exp, false_exp) {
+                    (New(cond), New(true_exp), New(false_exp)) => {
                         stack.push(ExpFrame::Ternary {
-                            cond,
-                            cond_type: InProgress,
-                            true_exp,
-                            true_type: New,
-                            false_exp,
-                            false_type: New,
+                            cond: InProgress,
+                            true_exp: New(true_exp),
+                            false_exp: New(false_exp),
                         });
                         stack.push(ExpFrame::from(cond));
                     }
-                    (InProgress, New, New) => {
+                    (InProgress, New(true_exp), New(false_exp)) => {
                         if t != Type::Bool {
                             return Err(());
                         }
                         stack.push(ExpFrame::Ternary {
-                            cond,
-                            cond_type: Done(t),
-                            true_exp,
-                            true_type: InProgress,
-                            false_exp,
-                            false_type: New,
+                            cond: Done(()),
+                            true_exp: InProgress,
+                            false_exp: New(false_exp),
                         });
                         stack.push(ExpFrame::from(true_exp));
                     }
-                    (Done(cond_type), InProgress, New) => {
+                    (Done(()), InProgress, New(false_exp)) => {
                         stack.push(ExpFrame::Ternary {
-                            cond,
-                            cond_type: Done(cond_type),
-                            true_exp,
-                            true_type: Done(t),
-                            false_exp,
-                            false_type: InProgress,
+                            cond: Done(()),
+                            true_exp: Done(t),
+                            false_exp: InProgress,
                         });
                         stack.push(ExpFrame::from(false_exp));
                     }
-                    (Done(_), Done(true_type), InProgress) => {
+                    (Done(()), Done(true_type), InProgress) => {
                         if true_type != t {
                             return Err(());
                         }
@@ -394,11 +349,11 @@ enum StmtFrameKind<'a> {
         next: usize,
     },
     Nop,
-    Declare(FrameProgress<()>),
+    Declare(FrameProgress<(), ()>),
     Exp,
     If {
-        true_check: FrameProgress<()>,
-        false_check: FrameProgress<()>,
+        true_check: FrameProgress<(), ()>,
+        false_check: FrameProgress<(), ()>,
     },
     While,
 }
@@ -412,7 +367,7 @@ impl<'a> From<&'a Stmt<'a>> for StmtFrame<'a> {
     fn from(s: &'a Stmt<'a>) -> Self {
         match s {
             Stmt::Declare(_, _, _) => Self {
-                kind: StmtFrameKind::Declare(New),
+                kind: StmtFrameKind::Declare(New(())),
                 statement: s,
             },
             Stmt::Assign(_, _) => Self {
@@ -433,8 +388,8 @@ impl<'a> From<&'a Stmt<'a>> for StmtFrame<'a> {
             },
             Stmt::If { .. } => Self {
                 kind: StmtFrameKind::If {
-                    true_check: New,
-                    false_check: New,
+                    true_check: New(()),
+                    false_check: New(()),
                 },
                 statement: s,
             },
@@ -454,7 +409,7 @@ impl<'a> Stmt<'a> {
     /// Checks whether the statement, provided the current type information
     /// in `types`, is valid and returns a type `t`, if it returns at all.
     /// If it does not return, then any return type is valid.
-    fn typecheck_recursive(
+    fn type_check_recursive(
         self: &'a Stmt<'a>,
         types: &mut TypeMap<'a>,
         t: Type,
@@ -475,7 +430,7 @@ impl<'a> Stmt<'a> {
             }
             Stmt::Seq(block) => block
                 .iter()
-                .try_for_each(|s| s.typecheck_recursive(types, t)),
+                .try_for_each(|s| s.type_check_recursive(types, t)),
             Stmt::Nop => Ok(()),
             Stmt::Declare(var, var_type, scope) => {
                 // disallow shadowing
@@ -483,7 +438,7 @@ impl<'a> Stmt<'a> {
                     return Err(());
                 }
                 types.insert(var, *var_type);
-                let result = scope.typecheck_recursive(types, t);
+                let result = scope.type_check_recursive(types, t);
                 types.remove(var);
                 result
             }
@@ -495,15 +450,15 @@ impl<'a> Stmt<'a> {
             } => {
                 if cond.synthesize(types) == Ok(Type::Bool) {
                     stmt_true
-                        .typecheck_recursive(types, t)
-                        .and(stmt_false.typecheck_recursive(types, t))
+                        .type_check_recursive(types, t)
+                        .and(stmt_false.type_check_recursive(types, t))
                 } else {
                     Err(())
                 }
             }
             Stmt::While { cond, body } => {
                 if cond.synthesize(types) == Ok(Type::Bool) {
-                    body.typecheck_recursive(types, t)
+                    body.type_check_recursive(types, t)
                 } else {
                     Err(())
                 }
@@ -511,7 +466,7 @@ impl<'a> Stmt<'a> {
         }
     }
 
-    fn typecheck_iterative(
+    fn type_check_iterative(
         self: &'a Stmt<'a>,
         types: &mut TypeMap<'a>,
         t: Type,
@@ -563,7 +518,7 @@ impl<'a> Stmt<'a> {
                         unreachable!()
                     };
                     match frame_progress {
-                        New => {
+                        New(()) => {
                             // disallow shadowing
                             if types.insert(*var, *var_type).is_some() {
                                 return Err(());
@@ -575,7 +530,7 @@ impl<'a> Stmt<'a> {
                             stack.push(StmtFrame::from(scope.as_ref()));
                         }
                         InProgress => unreachable!(),
-                        Done(_) => {
+                        Done(()) => {
                             types.remove(var);
                         }
                     }
@@ -601,7 +556,7 @@ impl<'a> Stmt<'a> {
                         unreachable!()
                     };
                     match (true_check, false_check) {
-                        (New, New) => {
+                        (New(()), New(())) => {
                             if cond.synthesize(types) != Ok(Type::Bool) {
                                 return Err(());
                             }
@@ -609,13 +564,13 @@ impl<'a> Stmt<'a> {
                             stack.push(StmtFrame {
                                 kind: StmtFrameKind::If {
                                     true_check: InProgress,
-                                    false_check: New,
+                                    false_check: New(()),
                                 },
                                 statement: frame.statement,
                             });
                             stack.push(StmtFrame::from(stmt_true.as_ref()));
                         }
-                        (InProgress, New) => {
+                        (InProgress, New(())) => {
                             stack.push(StmtFrame {
                                 kind: StmtFrameKind::If {
                                     true_check: Done(()),
@@ -625,7 +580,7 @@ impl<'a> Stmt<'a> {
                             });
                             stack.push(StmtFrame::from(stmt_false.as_ref()));
                         }
-                        (Done(_), InProgress) => (),
+                        (Done(()), InProgress) => (),
                         _ => unreachable!(),
                     }
                 }
@@ -645,19 +600,19 @@ impl<'a> Stmt<'a> {
         Ok(())
     }
 
-    fn typecheck(
+    fn type_check(
         self: &'a Stmt<'a>,
         types: &mut TypeMap<'a>,
         t: Type,
     ) -> Result<(), ()> {
-        self.typecheck_iterative(types, t)
+        self.type_check_iterative(types, t)
     }
 }
 
 impl<'a> Program<'a> {
-    pub fn typecheck(self: &'a Program<'a>) -> Result<(), ()> {
+    pub fn type_check(self: &'a Program<'a>) -> Result<(), ()> {
         let mut types = HashMap::new();
         let inner = self.as_ref();
-        inner.typecheck(&mut types, Type::Int)
+        inner.type_check(&mut types, Type::Int)
     }
 }

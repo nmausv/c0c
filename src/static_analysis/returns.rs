@@ -15,41 +15,10 @@ enum Frame<'a> {
     Exp,
     While,
     If {
-        stmt_true: &'a Stmt<'a>,
-        return_true: FrameProgress<bool>,
-        stmt_false: &'a Stmt<'a>,
-        return_false: FrameProgress<bool>,
+        stmt_true: FrameProgress<&'a Stmt<'a>, bool>,
+        stmt_false: FrameProgress<&'a Stmt<'a>, bool>,
     },
     Return,
-}
-
-impl<'a> std::fmt::Debug for Frame<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Frame::Declare(_) => write!(f, "[Declare {{scope}}]"),
-            Frame::Assign => write!(f, "[Assign]"),
-            Frame::Nop => write!(f, "[Nop]"),
-            Frame::Seq {
-                list: _,
-                next,
-                any_returns,
-            } => write!(
-                f,
-                "[Seq {{next: {next}}} {{any_returns: {any_returns}}}]"
-            ),
-            Frame::Exp => write!(f, "[Exp]"),
-            Frame::While => write!(f, "[While]"),
-            Frame::If {
-                stmt_true: _,
-                return_true,
-                stmt_false: _,
-                return_false,
-            } => {
-                write!(f, "[If {{return_true: {return_true:?}}} {{return_false: {return_false:?}}}]")
-            }
-            Frame::Return => write!(f, "[Return]"),
-        }
-    }
 }
 
 impl<'a> Frame<'a> {
@@ -69,10 +38,8 @@ impl<'a> Frame<'a> {
                 stmt_true,
                 stmt_false,
             } => Frame::If {
-                stmt_true,
-                return_true: New,
-                stmt_false,
-                return_false: New,
+                stmt_true: New(stmt_true),
+                stmt_false: New(stmt_false),
             },
             Stmt::While { .. } => Frame::While,
             Stmt::Exp(_) => Frame::Exp,
@@ -132,25 +99,19 @@ impl<'a> Stmt<'a> {
                 Frame::While => returns = false,
                 Frame::If {
                     stmt_true,
-                    return_true,
                     stmt_false,
-                    return_false,
-                } => match (return_true, return_false) {
-                    (New, New) => {
+                } => match (stmt_true, stmt_false) {
+                    (New(stmt_true), New(stmt_false)) => {
                         stack.push(Frame::If {
-                            stmt_true,
-                            return_true: InProgress,
-                            stmt_false,
-                            return_false: New,
+                            stmt_true: InProgress,
+                            stmt_false: New(stmt_false),
                         });
                         stack.push(Frame::new(stmt_true));
                     }
-                    (InProgress, New) => {
+                    (InProgress, New(stmt_false)) => {
                         stack.push(Frame::If {
-                            stmt_true,
-                            return_true: Done(returns),
-                            stmt_false,
-                            return_false: InProgress,
+                            stmt_true: Done(returns),
+                            stmt_false: InProgress,
                         });
                         stack.push(Frame::new(stmt_false));
                     }

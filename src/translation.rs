@@ -5,241 +5,697 @@ pub mod tree;
 use std::collections::VecDeque;
 
 use crate::frontend::elab_ast::{self, OpType};
-use crate::temps::{Label, TempFactory};
+use crate::temps::{Label, Temp, TempFactory};
 
 use crate::heap_recursion::FrameProgress::{self, Done, InProgress, New};
 
-fn translate_bool<'input>(
+struct ExpContext<'input> {
     tf: &'input mut TempFactory,
-    boolexp: &'input elab_ast::Exp<'input>,
-    branch_true: Label,
-    branch_false: Label,
-) -> Vec<tree::Command> {
-    match boolexp {
-        elab_ast::Exp::Num(1) => vec![tree::Command::Goto(branch_true)],
-        elab_ast::Exp::Num(0) => vec![tree::Command::Goto(branch_false)],
-        elab_ast::Exp::Unop(elab_ast::Unop::LogNegate, exp) => {
-            translate_bool(tf, exp.as_ref(), branch_false, branch_true)
-        }
-        elab_ast::Exp::PureBinop(e1, op, e2)
-            if op.signature() != OpType::Arithmetic =>
-        {
-            let (mut c1, p1) = translate_exp(tf, e1.as_ref());
-            let (mut c2, p2) = translate_exp(tf, e2.as_ref());
-            c1.append(&mut c2);
-            c1.push(tree::Command::If {
-                left: p1,
-                comp: (*op).into(),
-                right: p2,
-                branch_true,
-                branch_false,
-            });
-            c1
-        }
-        elab_ast::Exp::Ternary {
-            cond,
-            exp_true,
-            exp_false,
-        } => {
-            // check cond, if true goto ter_true else goto ter_false
-            // ter_true:
-            // check exp_true, if true goto branch_true else goto branch_false
-            // ter_false:
-            // check exp_false, if true goto branch_true else goto branch_false
-
-            let ter_branch_true = tf.make_label();
-            let ter_branch_false = tf.make_label();
-
-            let mut commands = translate_bool(
-                tf,
-                cond.as_ref(),
-                ter_branch_true.clone(),
-                ter_branch_false.clone(),
-            );
-
-            let mut ter_true = translate_bool(
-                tf,
-                exp_true.as_ref(),
-                branch_true.clone(),
-                branch_false.clone(),
-            );
-
-            let mut ter_false = translate_bool(
-                tf,
-                exp_false.as_ref(),
-                branch_true,
-                branch_false,
-            );
-
-            commands.push(tree::Command::Label(ter_branch_true));
-            commands.append(&mut ter_true);
-
-            commands.push(tree::Command::Label(ter_branch_false));
-            commands.append(&mut ter_false);
-
-            commands
-        }
-        exp => {
-            let (mut commands, pure) = translate_exp(tf, exp);
-            // if pure != 0
-            // then goto branch_true
-            // else goto branch_false
-            commands.push(tree::Command::If {
-                left: pure,
-                comp: elab_ast::Binop::Pure(elab_ast::PureBinop::NotEq),
-                right: tree::PureExp::Num(0),
-                branch_true,
-                branch_false,
-            });
-            commands
-        }
-    }
+    stack: Vec<ExpFrame<'input>>,
+    commands: Vec<tree::Command>,
+    pure_exp: Option<tree::PureExp>,
 }
 
-fn translate_exp<'input>(
-    tf: &mut crate::temps::TempFactory,
-    exp: &elab_ast::Exp<'input>,
-) -> (Vec<tree::Command>, tree::PureExp) {
-    match exp {
-        elab_ast::Exp::Num(n) => (vec![], tree::PureExp::Num(*n)),
-        elab_ast::Exp::True => (vec![], tree::PureExp::Num(1)),
-        elab_ast::Exp::False => (vec![], tree::PureExp::Num(0)),
-        elab_ast::Exp::Lvalue(elab_ast::Lvalue::Ident(x)) => {
-            (vec![], tree::PureExp::Ident((*x).into()))
-        }
-        // Note that logical operations like (a && b) require short circuit
-        // evaluation, so they cannot be translated like arithmetic operations
-        // like (a + b), which always require computing both a and b
-        elab_ast::Exp::PureBinop(e1, binop, e2)
-            if binop.signature() == OpType::Arithmetic =>
-        {
-            let (mut c1, p1) = translate_exp(tf, e1.as_ref());
-            let (mut c2, p2) = translate_exp(tf, e2.as_ref());
-            c1.append(&mut c2);
-            (
-                c1,
-                tree::PureExp::PureBinop(Box::new(p1), *binop, Box::new(p2)),
-            )
-        }
-        elab_ast::Exp::Unop(op, exp)
-            if op.signature() == OpType::Arithmetic =>
-        {
-            let (commands, pure) = translate_exp(tf, exp.as_ref());
-            (commands, tree::PureExp::Unop(*op, Box::new(pure)))
-        }
-        elab_ast::Exp::ImpureBinop(e1, binop, e2) => {
-            let (mut c1, p1) = translate_exp(tf, e1.as_ref());
-            let (mut c2, p2) = translate_exp(tf, e2.as_ref());
-            c1.append(&mut c2);
-            let t1 = tf.make_temp();
-            c1.push(tree::Command::StoreImpureBinop {
-                dest: t1.clone().into(),
-                left: p1,
-                op: *binop,
-                right: p2,
-            });
-            (c1, tree::PureExp::Ident(t1.into()))
-        }
-        elab_ast::Exp::Ternary {
-            cond,
-            exp_true,
-            exp_false,
-        } => {
-            let branch_true = tf.make_label();
-            let branch_false = tf.make_label();
-            let branch_done = tf.make_label();
-
-            let result = tf.make_temp();
-
-            let mut commands = translate_bool(
-                tf,
-                cond.as_ref(),
-                branch_true.clone(),
-                branch_false.clone(),
-            );
-
-            let (mut c1, p1) = translate_exp(tf, exp_true.as_ref());
-            let (mut c2, p2) = translate_exp(tf, exp_false.as_ref());
-
-            commands.push(tree::Command::Label(branch_true));
-            commands.append(&mut c1);
-            commands.push(tree::Command::Store(result.clone().into(), p1));
-            commands.push(tree::Command::Goto(branch_done.clone()));
-
-            commands.push(tree::Command::Label(branch_false));
-            commands.append(&mut c2);
-            commands.push(tree::Command::Store(result.clone().into(), p2));
-            commands.push(tree::Command::Goto(branch_done.clone()));
-
-            commands.push(tree::Command::Label(branch_done));
-
-            (commands, tree::PureExp::Ident(result.into()))
-        }
-        exp => {
-            let branch_true = tf.make_label();
-            let branch_false = tf.make_label();
-            let branch_done = tf.make_label();
-
-            let result = tf.make_temp();
-
-            let mut commands = translate_bool(
-                tf,
-                exp,
-                branch_true.clone(),
-                branch_false.clone(),
-            );
-
-            // branch_true:
-            // compute p1
-            // result = p1
-            // goto branch_done
-            commands.push(tree::Command::Label(branch_true));
-            commands.push(tree::Command::Store(
-                result.clone().into(),
-                tree::PureExp::Num(1),
-            ));
-            commands.push(tree::Command::Goto(branch_done.clone()));
-
-            // branch_false:
-            // compute p2
-            // result = p2
-            // goto branch_done
-            commands.push(tree::Command::Label(branch_false));
-            commands.push(tree::Command::Store(
-                result.clone().into(),
-                tree::PureExp::Num(0),
-            ));
-            commands.push(tree::Command::Goto(branch_done.clone()));
-
-            // branch_done:
-            commands.push(tree::Command::Label(branch_done));
-
-            (commands, tree::PureExp::Ident(result.into()))
-        }
-    }
-}
-
-enum ExpFrame<'input> {
+#[derive(Debug)]
+enum ArithExpFrame<'input> {
     Num(elab_ast::Num),
     True,
     False,
     Lvalue(elab_ast::Lvalue<'input>),
     PureBinop {
         binop: elab_ast::PureBinop,
-        left: elab_ast::Exp<'input>,
-        trans_left: FrameProgress<(Vec<tree::Command>, tree::PureExp)>,
-        right: elab_ast::Exp<'input>,
-        trans_right: FrameProgress<(Vec<tree::Command>, tree::PureExp)>,
+        left: FrameProgress<elab_ast::Exp<'input>, tree::PureExp>,
+        right: FrameProgress<elab_ast::Exp<'input>, tree::PureExp>,
     },
     ImpureBinop {
-        binop: elab_ast::PureBinop,
-        left: elab_ast::Exp<'input>,
-        trans_left: FrameProgress<(Vec<tree::Command>, tree::PureExp)>,
-        right: elab_ast::Exp<'input>,
-        trans_right: FrameProgress<(Vec<tree::Command>, tree::PureExp)>,
+        binop: elab_ast::ImpureBinop,
+        left: FrameProgress<elab_ast::Exp<'input>, tree::PureExp>,
+        right: FrameProgress<elab_ast::Exp<'input>, tree::PureExp>,
     },
-    Unop {},
-    Ternary {},
+    Unop {
+        op: elab_ast::Unop,
+        exp: FrameProgress<elab_ast::Exp<'input>, ()>,
+    },
+    Ternary {
+        cond_progress: FrameProgress<elab_ast::Exp<'input>, ()>,
+        true_progress: FrameProgress<elab_ast::Exp<'input>, ()>,
+        false_progress: FrameProgress<elab_ast::Exp<'input>, ()>,
+
+        label_true: Label,
+        label_false: Label,
+        label_done: Label,
+        value: Temp,
+    },
+}
+
+impl<'input> ArithExpFrame<'input> {
+    fn new(tf: &mut TempFactory, value: elab_ast::Exp<'input>) -> Self {
+        match value {
+            elab_ast::Exp::Num(n) => Self::Num(n),
+            elab_ast::Exp::Lvalue(lvalue) => Self::Lvalue(lvalue),
+            elab_ast::Exp::PureBinop(left, pure_binop, right) => {
+                Self::PureBinop {
+                    binop: pure_binop,
+                    left: New(*left),
+                    right: New(*right),
+                }
+            }
+            elab_ast::Exp::ImpureBinop(left, impure_binop, right) => {
+                Self::ImpureBinop {
+                    binop: impure_binop,
+                    left: New(*left),
+                    right: New(*right),
+                }
+            }
+            elab_ast::Exp::Unop(unop, exp) => Self::Unop {
+                op: unop,
+                exp: New(*exp),
+            },
+            elab_ast::Exp::True => Self::True,
+            elab_ast::Exp::False => Self::False,
+            elab_ast::Exp::Ternary {
+                cond,
+                exp_true,
+                exp_false,
+            } => Self::Ternary {
+                cond_progress: New(*cond),
+                true_progress: New(*exp_true),
+                false_progress: New(*exp_false),
+                label_true: tf.make_label(),
+                label_false: tf.make_label(),
+                label_done: tf.make_label(),
+                value: tf.make_temp(),
+            },
+        }
+    }
+
+    #[allow(unused_variables)]
+    fn recurse(self, ctx: &mut ExpContext<'input>) {
+        match self {
+            ArithExpFrame::Num(n) => ctx.pure_exp = Some(tree::PureExp::Num(n)),
+            ArithExpFrame::True => ctx.pure_exp = Some(tree::PureExp::Num(1)),
+            ArithExpFrame::False => ctx.pure_exp = Some(tree::PureExp::Num(0)),
+            ArithExpFrame::Lvalue(lval) => {
+                let elab_ast::Lvalue::Ident(name) = lval;
+                ctx.pure_exp = Some(tree::PureExp::Ident(name.into()))
+            }
+            ArithExpFrame::PureBinop { binop, left, right }
+                if binop.signature() == OpType::Arithmetic =>
+            {
+                match (left, right) {
+                    (New(left), New(right)) => {
+                        ctx.stack.push(ExpFrame::Arith(
+                            ArithExpFrame::PureBinop {
+                                binop,
+                                left: InProgress,
+                                right: New(right),
+                            },
+                        ));
+                        ctx.stack.push(ExpFrame::new_arith(ctx.tf, left));
+                    }
+                    (InProgress, New(right)) => {
+                        ctx.stack.push(ExpFrame::Arith(
+                            ArithExpFrame::PureBinop {
+                                binop,
+                                left: Done(ctx.pure_exp.take().expect(
+                                    "binop left should not ever be a base case",
+                                )),
+                                right: InProgress,
+                            },
+                        ));
+                        ctx.stack.push(ExpFrame::new_arith(ctx.tf, right));
+                    }
+                    (Done(left), InProgress) => {
+                        ctx.pure_exp = Some(tree::PureExp::PureBinop(
+                            Box::new(left),
+                            binop,
+                            Box::new(ctx.pure_exp.take().expect(
+                                "binop right should never be a base case",
+                            )),
+                        ));
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            ArithExpFrame::PureBinop { .. } => {
+                unreachable!("possibly reachable?")
+            }
+            ArithExpFrame::ImpureBinop { binop, left, right } => {
+                match (left, right) {
+                    (New(left), New(right)) => {
+                        ctx.stack.push(ExpFrame::Arith(
+                            ArithExpFrame::ImpureBinop {
+                                binop,
+                                left: InProgress,
+                                right: New(right),
+                            },
+                        ));
+                        ctx.stack.push(ExpFrame::new_arith(ctx.tf, left));
+                    }
+                    (InProgress, New(right)) => {
+                        ctx.stack.push(ExpFrame::Arith(ArithExpFrame::ImpureBinop {
+                                    binop,
+                                    left: Done(ctx.pure_exp.take().expect("impure binop left should not ever be a base case")),
+                                    right: InProgress,
+                                }));
+                        ctx.stack.push(ExpFrame::new_arith(ctx.tf, right));
+                    }
+                    (Done(left), InProgress) => {
+                        let temp = ctx.tf.make_temp();
+                        ctx.commands.push(tree::Command::StoreImpureBinop {
+                            dest: temp.clone().into(),
+                            left,
+                            op: binop,
+                            right: ctx.pure_exp.take().expect("impure binop right should not ever be a base case"),
+                        });
+                        ctx.pure_exp = Some(tree::PureExp::Ident(temp.into()));
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            ArithExpFrame::Unop { op, exp }
+                if op.signature() == OpType::Arithmetic =>
+            {
+                match exp {
+                    New(exp) => {
+                        ctx.stack.push(ExpFrame::Arith(ArithExpFrame::Unop {
+                            op,
+                            exp: Done(()),
+                        }));
+                        ctx.stack.push(ExpFrame::new_arith(ctx.tf, exp));
+                    }
+                    InProgress => unreachable!(),
+                    Done(()) => {
+                        ctx.pure_exp =
+                            Some(tree::PureExp::Unop(
+                                op,
+                                Box::new(ctx.pure_exp.take().expect(
+                                    "unop should never be a base case",
+                                )),
+                            ));
+                    }
+                }
+            }
+            ArithExpFrame::Unop { op, exp } => todo!(),
+            ArithExpFrame::Ternary {
+                cond_progress,
+                true_progress,
+                false_progress,
+                label_true,
+                label_false,
+                label_done,
+                value,
+            } => match (cond_progress, true_progress, false_progress) {
+                (New(cond), New(true_exp), New(false_exp)) => {
+                    ctx.stack.push(ExpFrame::Arith(ArithExpFrame::Ternary {
+                        cond_progress: InProgress,
+                        true_progress: New(true_exp),
+                        false_progress: New(false_exp),
+                        label_true: label_true.clone(),
+                        label_false: label_false.clone(),
+                        label_done,
+                        value,
+                    }));
+                    ctx.stack.push(ExpFrame::new_bool(
+                                ctx.tf,
+                                cond,
+                                label_true,
+                                label_false,
+                            ).expect("non booleans should have been caught in type check for use in conditional"));
+                }
+                (InProgress, New(true_exp), New(false_exp)) => {
+                    // commands has computations which jump to `label_true` if `cond` is true,
+                    // and jumps to `label_false` if `cond` is false
+                    ctx.stack.push(ExpFrame::Arith(ArithExpFrame::Ternary {
+                        cond_progress: Done(()),
+                        true_progress: InProgress,
+                        false_progress: New(false_exp),
+                        label_true: label_true.clone(),
+                        label_false,
+                        label_done,
+                        value,
+                    }));
+                    ctx.commands.push(tree::Command::Label(label_true));
+                    ctx.stack.push(ExpFrame::new_arith(ctx.tf, true_exp));
+                }
+                (Done(cond), InProgress, New(false_exp)) => {
+                    // finish the true branch
+                    ctx.commands.push(tree::Command::Store(
+                        value.clone().into(),
+                        ctx.pure_exp
+                            .take()
+                            .expect("ternary true should never be base case"),
+                    ));
+                    ctx.commands.push(tree::Command::Goto(label_done.clone()));
+                    // start the false branch
+                    ctx.commands
+                        .push(tree::Command::Label(label_false.clone()));
+                    ctx.stack.push(ExpFrame::Arith(ArithExpFrame::Ternary {
+                        cond_progress: Done(cond),
+                        true_progress: Done(()),
+                        false_progress: InProgress,
+                        label_true,
+                        label_false,
+                        label_done,
+                        value,
+                    }));
+                    ctx.stack.push(ExpFrame::new_arith(ctx.tf, false_exp));
+                }
+                (Done(()), Done(()), InProgress) => {
+                    // finish the false branch
+                    ctx.commands.push(tree::Command::Store(
+                        value.into(),
+                        ctx.pure_exp
+                            .take()
+                            .expect("ternary false should never be base case"),
+                    ));
+                    ctx.commands.push(tree::Command::Goto(label_done.clone()));
+                    // set the done label
+                    ctx.commands
+                        .push(tree::Command::Label(label_false.clone()));
+                }
+                _ => unreachable!(),
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+enum BoolExpFrame<'input> {
+    True {
+        label_true: Label,
+        label_false: Label,
+    },
+    False {
+        label_true: Label,
+        label_false: Label,
+    },
+    Unop {
+        label_true: Label,
+        label_false: Label,
+        exp: elab_ast::Exp<'input>,
+    },
+    PureBinop {
+        label_true: Label,
+        label_false: Label,
+        left: FrameProgress<elab_ast::Exp<'input>, ()>,
+        op: elab_ast::PureBinop,
+        right: FrameProgress<elab_ast::Exp<'input>, ()>,
+    },
+    Ternary {
+        label_true: Label,
+        label_false: Label,
+        ter_true: Label,
+        ter_false: Label,
+        cond: FrameProgress<elab_ast::Exp<'input>, ()>,
+        true_exp: FrameProgress<elab_ast::Exp<'input>, ()>,
+        false_exp: FrameProgress<elab_ast::Exp<'input>, ()>,
+    },
+    Lvalue {
+        label_true: Label,
+        label_false: Label,
+        progress: FrameProgress<elab_ast::Lvalue<'input>, ()>,
+    },
+}
+
+impl<'input> BoolExpFrame<'input> {
+    fn new(
+        tf: &mut TempFactory,
+        value: elab_ast::Exp<'input>,
+        label_true: Label,
+        label_false: Label,
+    ) -> Result<Self, ()> {
+        match value {
+            elab_ast::Exp::Lvalue(lvalue) => Ok(Self::Lvalue {
+                label_true,
+                label_false,
+                progress: New(lvalue),
+            }),
+            elab_ast::Exp::PureBinop(left, op, right)
+                if op.signature() != OpType::Arithmetic =>
+            {
+                Ok(Self::PureBinop {
+                    label_true,
+                    label_false,
+                    left: New(*left),
+                    op,
+                    right: New(*right),
+                })
+            }
+            elab_ast::Exp::Unop(elab_ast::Unop::LogNegate, exp) => {
+                Ok(Self::Unop {
+                    label_true,
+                    label_false,
+                    exp: *exp,
+                })
+            }
+            elab_ast::Exp::True => Ok(Self::True {
+                label_true,
+                label_false,
+            }),
+            elab_ast::Exp::False => Ok(Self::False {
+                label_true,
+                label_false,
+            }),
+            elab_ast::Exp::Ternary {
+                cond,
+                exp_true,
+                exp_false,
+            } => Ok(Self::Ternary {
+                label_true,
+                label_false,
+                ter_true: tf.make_label(),
+                ter_false: tf.make_label(),
+                cond: New(*cond),
+                true_exp: New(*exp_true),
+                false_exp: New(*exp_false),
+            }),
+            elab_ast::Exp::Num(..) => Err(()),
+            elab_ast::Exp::Unop(..) => Err(()),
+            elab_ast::Exp::PureBinop(..) => Err(()),
+            elab_ast::Exp::ImpureBinop(..) => Err(()),
+        }
+    }
+
+    #[allow(unused_variables)]
+    fn recurse(self, ctx: &mut ExpContext<'input>) {
+        match self {
+            BoolExpFrame::True {
+                label_true,
+                label_false: _,
+            } => ctx.commands.push(tree::Command::Goto(label_true)),
+            BoolExpFrame::False {
+                label_true: _,
+                label_false,
+            } => ctx.commands.push(tree::Command::Goto(label_false)),
+            BoolExpFrame::Unop {
+                label_true,
+                label_false,
+                exp,
+            } => {
+                // note the labels switched
+                ctx.stack.push(ExpFrame::Bool(
+                    BoolExpFrame::new(ctx.tf, exp, label_false, label_true)
+                        .expect("non boolean expression should never be logically negated"),
+                ));
+            }
+            BoolExpFrame::PureBinop {
+                label_true,
+                label_false,
+                left,
+                op,
+                right,
+            } => todo!(),
+            BoolExpFrame::Ternary {
+                label_true,
+                label_false,
+                ter_true,
+                ter_false,
+                cond,
+                true_exp,
+                false_exp,
+            } => todo!(),
+            BoolExpFrame::Lvalue {
+                label_true,
+                label_false,
+                progress,
+            } => todo!(),
+        }
+    }
+}
+
+enum ExpFrame<'input> {
+    Arith(ArithExpFrame<'input>),
+    Bool(BoolExpFrame<'input>),
+}
+
+impl<'input> ExpFrame<'input> {
+    fn new_arith(tf: &mut TempFactory, exp: elab_ast::Exp<'input>) -> Self {
+        Self::Arith(ArithExpFrame::new(tf, exp))
+    }
+
+    fn new_bool(
+        tf: &mut TempFactory,
+        exp: elab_ast::Exp<'input>,
+        label_true: Label,
+        label_false: Label,
+    ) -> Result<Self, ()> {
+        Ok(Self::Bool(BoolExpFrame::new(
+            tf,
+            exp,
+            label_true,
+            label_false,
+        )?))
+    }
+
+    fn recurse(self, ctx: &mut ExpContext<'input>) {
+        match self {
+            ExpFrame::Arith(frame) => frame.recurse(ctx),
+            ExpFrame::Bool(frame) => frame.recurse(ctx),
+        }
+    }
+}
+
+impl<'input> elab_ast::Exp<'input> {
+    fn translate_bool_recursive(
+        self,
+        tf: &mut TempFactory,
+        branch_true: Label,
+        branch_false: Label,
+    ) -> Vec<tree::Command> {
+        match self {
+            elab_ast::Exp::True => vec![tree::Command::Goto(branch_true)],
+            elab_ast::Exp::False => vec![tree::Command::Goto(branch_false)],
+            elab_ast::Exp::Unop(elab_ast::Unop::LogNegate, exp) => {
+                exp.translate_bool_recursive(tf, branch_false, branch_true)
+            }
+            elab_ast::Exp::PureBinop(e1, op, e2)
+                if op.signature() != OpType::Arithmetic =>
+            {
+                let (mut c1, p1) = e1.translate_recursive(tf);
+                let (mut c2, p2) = e2.translate_recursive(tf);
+                c1.append(&mut c2);
+                c1.push(tree::Command::If {
+                    left: p1,
+                    comp: op.into(),
+                    right: p2,
+                    branch_true,
+                    branch_false,
+                });
+                c1
+            }
+            elab_ast::Exp::Ternary {
+                cond,
+                exp_true,
+                exp_false,
+            } => {
+                // check cond, if true goto ter_true else goto ter_false
+                // ter_true:
+                // check exp_true, if true goto branch_true else goto branch_false
+                // ter_false:
+                // check exp_false, if true goto branch_true else goto branch_false
+
+                let ter_branch_true = tf.make_label();
+                let ter_branch_false = tf.make_label();
+
+                let mut commands = cond.translate_bool_recursive(
+                    tf,
+                    ter_branch_true.clone(),
+                    ter_branch_false.clone(),
+                );
+
+                let mut ter_true = exp_true.translate_bool_recursive(
+                    tf,
+                    branch_true.clone(),
+                    branch_false.clone(),
+                );
+
+                let mut ter_false = exp_false.translate_bool_recursive(
+                    tf,
+                    branch_true,
+                    branch_false,
+                );
+
+                commands.push(tree::Command::Label(ter_branch_true));
+                commands.append(&mut ter_true);
+
+                commands.push(tree::Command::Label(ter_branch_false));
+                commands.append(&mut ter_false);
+
+                commands
+            }
+            elab_ast::Exp::Lvalue(lval) => {
+                let (mut commands, pure) =
+                    elab_ast::Exp::Lvalue(lval).translate_recursive(tf);
+                // if pure != 0
+                // then goto branch_true
+                // else goto branch_false
+                commands.push(tree::Command::If {
+                    left: pure,
+                    comp: elab_ast::Binop::Pure(elab_ast::PureBinop::NotEq),
+                    right: tree::PureExp::Num(0),
+                    branch_true,
+                    branch_false,
+                });
+                commands
+            }
+            elab_ast::Exp::Unop(..) => unreachable!(),
+            elab_ast::Exp::ImpureBinop(..) => unreachable!(),
+            elab_ast::Exp::Num(..) => unreachable!(),
+            elab_ast::Exp::PureBinop(..) => unreachable!(),
+        }
+    }
+
+    fn translate_recursive(
+        self,
+        tf: &mut TempFactory,
+    ) -> (Vec<tree::Command>, tree::PureExp) {
+        match self {
+            elab_ast::Exp::Num(n) => (vec![], tree::PureExp::Num(n)),
+            elab_ast::Exp::True => (vec![], tree::PureExp::Num(1)),
+            elab_ast::Exp::False => (vec![], tree::PureExp::Num(0)),
+            elab_ast::Exp::Lvalue(elab_ast::Lvalue::Ident(x)) => {
+                (vec![], tree::PureExp::Ident((*x).into()))
+            }
+            // Note that logical operations like (a && b) require short circuit
+            // evaluation, so they cannot be translated like arithmetic operations
+            // like (a + b), which always require computing both a and b
+            elab_ast::Exp::PureBinop(e1, binop, e2)
+                if binop.signature() == OpType::Arithmetic =>
+            {
+                let (mut c1, p1) = e1.translate_recursive(tf);
+                let (mut c2, p2) = e2.translate_recursive(tf);
+                c1.append(&mut c2);
+                (
+                    c1,
+                    tree::PureExp::PureBinop(Box::new(p1), binop, Box::new(p2)),
+                )
+            }
+            elab_ast::Exp::Unop(op, exp)
+                if op.signature() == OpType::Arithmetic =>
+            {
+                let (commands, pure) = exp.translate_recursive(tf);
+                (commands, tree::PureExp::Unop(op, Box::new(pure)))
+            }
+            elab_ast::Exp::ImpureBinop(e1, binop, e2) => {
+                let (mut c1, p1) = e1.translate_recursive(tf);
+                let (mut c2, p2) = e2.translate_recursive(tf);
+                c1.append(&mut c2);
+                let t1 = tf.make_temp();
+                c1.push(tree::Command::StoreImpureBinop {
+                    dest: t1.clone().into(),
+                    left: p1,
+                    op: binop,
+                    right: p2,
+                });
+                (c1, tree::PureExp::Ident(t1.into()))
+            }
+            elab_ast::Exp::Ternary {
+                cond,
+                exp_true,
+                exp_false,
+            } => {
+                let branch_true = tf.make_label();
+                let branch_false = tf.make_label();
+                let branch_done = tf.make_label();
+
+                let result = tf.make_temp();
+
+                let mut commands = cond.translate_bool_recursive(
+                    tf,
+                    branch_true.clone(),
+                    branch_false.clone(),
+                );
+
+                let (mut c1, p1) = exp_true.translate_recursive(tf);
+                let (mut c2, p2) = exp_false.translate_recursive(tf);
+
+                commands.push(tree::Command::Label(branch_true));
+                commands.append(&mut c1);
+                commands.push(tree::Command::Store(result.clone().into(), p1));
+                commands.push(tree::Command::Goto(branch_done.clone()));
+
+                commands.push(tree::Command::Label(branch_false));
+                commands.append(&mut c2);
+                commands.push(tree::Command::Store(result.clone().into(), p2));
+                commands.push(tree::Command::Goto(branch_done.clone()));
+
+                commands.push(tree::Command::Label(branch_done));
+
+                (commands, tree::PureExp::Ident(result.into()))
+            }
+            exp => {
+                let branch_true = tf.make_label();
+                let branch_false = tf.make_label();
+                let branch_done = tf.make_label();
+
+                let result = tf.make_temp();
+
+                let mut commands = exp.translate_bool_recursive(
+                    tf,
+                    branch_true.clone(),
+                    branch_false.clone(),
+                );
+
+                // branch_true:
+                // compute p1
+                // result = p1
+                // goto branch_done
+                commands.push(tree::Command::Label(branch_true));
+                commands.push(tree::Command::Store(
+                    result.clone().into(),
+                    tree::PureExp::Num(1),
+                ));
+                commands.push(tree::Command::Goto(branch_done.clone()));
+
+                // branch_false:
+                // compute p2
+                // result = p2
+                // goto branch_done
+                commands.push(tree::Command::Label(branch_false));
+                commands.push(tree::Command::Store(
+                    result.clone().into(),
+                    tree::PureExp::Num(0),
+                ));
+                commands.push(tree::Command::Goto(branch_done.clone()));
+
+                // branch_done:
+                commands.push(tree::Command::Label(branch_done));
+
+                (commands, tree::PureExp::Ident(result.into()))
+            }
+        }
+    }
+
+    fn translate_iterative(
+        self,
+        tf: &mut TempFactory,
+    ) -> (Vec<tree::Command>, tree::PureExp) {
+        let mut ctx = ExpContext {
+            tf,
+            stack: Vec::new(),
+            commands: Vec::new(),
+            pure_exp: None,
+        };
+
+        ctx.stack.push(ExpFrame::new_arith(ctx.tf, self));
+
+        while let Some(frame) = ctx.stack.pop() {
+            frame.recurse(&mut ctx);
+        }
+
+        (
+            ctx.commands,
+            ctx.pure_exp.expect("cannot translate empty expression"),
+        )
+    }
+
+    fn translate(
+        self,
+        tf: &mut TempFactory,
+    ) -> (Vec<tree::Command>, tree::PureExp) {
+        self.translate_iterative(tf)
+    }
 }
 
 enum StmtFrame<'input> {
@@ -249,21 +705,20 @@ enum StmtFrame<'input> {
     },
     If {
         label_true: Label,
-        body_true: elab_ast::Stmt<'input>,
-        translated_true: FrameProgress<()>,
+        body_true: FrameProgress<elab_ast::Stmt<'input>, ()>,
 
         label_false: Label,
-        body_false: elab_ast::Stmt<'input>,
-        translated_false: FrameProgress<()>,
+        body_false: FrameProgress<elab_ast::Stmt<'input>, ()>,
 
         label_done: Label,
     },
     While {
         label_cond: Label,
-        cond: elab_ast::Exp<'input>,
+        cond: FrameProgress<elab_ast::Exp<'input>, ()>,
+
         label_body: Label,
-        translated_body: FrameProgress<()>,
-        body: elab_ast::Stmt<'input>,
+        body: FrameProgress<elab_ast::Stmt<'input>, ()>,
+
         done: Label,
     },
     Nop,
@@ -274,10 +729,7 @@ enum StmtFrame<'input> {
 }
 
 impl<'input> StmtFrame<'input> {
-    fn new(
-        tf: &mut crate::temps::TempFactory,
-        value: elab_ast::Stmt<'input>,
-    ) -> Self {
+    fn new(tf: &mut TempFactory, value: elab_ast::Stmt<'input>) -> Self {
         match value {
             elab_ast::Stmt::Declare(_, _, scope) => Self::Declare(*scope),
             elab_ast::Stmt::Assign(elab_ast::Lvalue::Ident(var), exp) => {
@@ -292,19 +744,16 @@ impl<'input> StmtFrame<'input> {
                 stmt_false,
             } => Self::If {
                 label_true: tf.make_label(),
-                body_true: *stmt_true,
-                translated_true: New,
+                body_true: New(*stmt_true),
                 label_false: tf.make_label(),
-                body_false: *stmt_false,
-                translated_false: New,
+                body_false: New(*stmt_false),
                 label_done: tf.make_label(),
             },
             elab_ast::Stmt::While { cond, body } => Self::While {
                 label_cond: tf.make_label(),
-                cond,
+                cond: New(cond),
                 label_body: tf.make_label(),
-                body: *body,
-                translated_body: New,
+                body: New(*body),
                 done: tf.make_label(),
             },
             elab_ast::Stmt::Exp(exp) => Self::Exp(exp),
@@ -315,7 +764,7 @@ impl<'input> StmtFrame<'input> {
 impl<'input> elab_ast::Stmt<'input> {
     fn translate_iterative(
         self: elab_ast::Stmt<'input>,
-        tf: &mut crate::temps::TempFactory,
+        tf: &mut TempFactory,
     ) -> Vec<tree::Command> {
         let mut commands = Vec::new();
         let mut stack: Vec<StmtFrame> = Vec::new();
@@ -340,34 +789,28 @@ impl<'input> elab_ast::Stmt<'input> {
                 StmtFrame::If {
                     label_true,
                     body_true,
-                    translated_true,
                     label_false,
                     body_false,
-                    translated_false,
                     label_done,
-                } => match (translated_true, translated_false) {
-                    (New, New) => {
+                } => match (body_true, body_false) {
+                    (New(body_true), New(body_false)) => {
                         let child_frame = StmtFrame::new(tf, body_true);
                         stack.push(StmtFrame::If {
                             label_true: label_true.clone(),
-                            body_true: elab_ast::Stmt::default(),
-                            translated_true: InProgress,
+                            body_true: InProgress,
                             label_false,
-                            body_false,
-                            translated_false: New,
+                            body_false: New(body_false),
                             label_done,
                         });
                         stack.push(child_frame);
                         commands.push(tree::Command::Label(label_true));
                     }
-                    (InProgress, New) => {
+                    (InProgress, New(body_false)) => {
                         let parent_frame = StmtFrame::If {
                             label_true,
-                            body_true,
-                            translated_true: Done(()),
+                            body_true: Done(()),
                             label_false: label_false.clone(),
-                            body_false: elab_ast::Stmt::default(),
-                            translated_false: InProgress,
+                            body_false: InProgress,
                             label_done: label_done.clone(),
                         };
                         stack.push(parent_frame);
@@ -377,7 +820,7 @@ impl<'input> elab_ast::Stmt<'input> {
                         commands.push(tree::Command::Goto(label_done.clone()));
                         commands.push(tree::Command::Label(label_false));
                     }
-                    (Done(_), InProgress) => {
+                    (Done(()), InProgress) => {
                         commands.push(tree::Command::Goto(label_done.clone()));
                         commands.push(tree::Command::Label(label_done));
                     }
@@ -388,14 +831,12 @@ impl<'input> elab_ast::Stmt<'input> {
                     cond,
                     label_body,
                     body,
-                    translated_body,
                     done,
-                } => match translated_body {
-                    New => {
+                } => match (cond, body) {
+                    (New(cond), New(body)) => {
                         commands.push(tree::Command::Label(label_cond.clone()));
-                        commands.append(&mut translate_bool(
+                        commands.append(&mut cond.translate_bool_recursive(
                             tf,
-                            &cond,
                             label_body.clone(),
                             done.clone(),
                         ));
@@ -403,30 +844,29 @@ impl<'input> elab_ast::Stmt<'input> {
 
                         stack.push(StmtFrame::While {
                             label_cond: label_cond.clone(),
-                            cond,
+                            cond: Done(()),
                             label_body: label_body.clone(),
-                            translated_body: InProgress,
-                            body: elab_ast::Stmt::default(),
+                            body: InProgress,
                             done,
                         });
 
                         let child_frame = StmtFrame::new(tf, body);
                         stack.push(child_frame);
                     }
-                    InProgress => unreachable!(),
-                    Done(_) => {
+                    (Done(()), InProgress) => {
                         commands.push(tree::Command::Goto(label_cond));
                         commands.push(tree::Command::Label(done));
                     }
+                    _ => unreachable!(),
                 },
                 StmtFrame::Nop => (),
                 StmtFrame::Assign(elab_ast::Lvalue::Ident(var), exp) => {
-                    let (mut edown, eup) = translate_exp(tf, &exp);
+                    let (mut edown, eup) = exp.translate(tf);
                     commands.append(&mut edown);
                     commands.push(tree::Command::Store((*var).into(), eup));
                 }
                 StmtFrame::Return(exp) => {
-                    let (mut edown, eup) = translate_exp(tf, &exp);
+                    let (mut edown, eup) = exp.translate(tf);
                     commands.append(&mut edown);
                     commands.push(tree::Command::Return(eup));
                 }
@@ -435,7 +875,7 @@ impl<'input> elab_ast::Stmt<'input> {
                     stack.push(child_frame);
                 }
                 StmtFrame::Exp(exp) => {
-                    let (mut edown, _) = translate_exp(tf, &exp);
+                    let (mut edown, _) = exp.translate(tf);
                     commands.append(&mut edown);
                 }
             }
@@ -445,22 +885,22 @@ impl<'input> elab_ast::Stmt<'input> {
     }
 
     fn translate_recursive(
-        self: &elab_ast::Stmt<'input>,
-        tf: &mut crate::temps::TempFactory,
+        self: elab_ast::Stmt<'input>,
+        tf: &mut TempFactory,
     ) -> Vec<tree::Command> {
         match self {
             elab_ast::Stmt::Nop => vec![],
             elab_ast::Stmt::Seq(block) => block
-                .iter()
+                .into_iter()
                 .flat_map(|s| s.translate_recursive(tf))
                 .collect(),
             elab_ast::Stmt::Assign(elab_ast::Lvalue::Ident(var), e) => {
-                let (mut edown, eup) = translate_exp(tf, e);
+                let (mut edown, eup) = e.translate(tf);
                 edown.push(tree::Command::Store((*var).into(), eup));
                 edown
             }
             elab_ast::Stmt::Return(e) => {
-                let (mut edown, eup) = translate_exp(tf, e);
+                let (mut edown, eup) = e.translate(tf);
                 edown.push(tree::Command::Return(eup));
                 edown
             }
@@ -476,9 +916,8 @@ impl<'input> elab_ast::Stmt<'input> {
                 let branch_false = tf.make_label();
                 let branch_done = tf.make_label();
 
-                let mut commands = translate_bool(
+                let mut commands = cond.translate_bool_recursive(
                     tf,
-                    cond,
                     branch_true.clone(),
                     branch_false.clone(),
                 );
@@ -512,9 +951,9 @@ impl<'input> elab_ast::Stmt<'input> {
 
                 let mut commands =
                     vec![tree::Command::Label(cond_body.clone())];
-                commands.append(&mut translate_bool(
+
+                commands.append(&mut cond.translate_bool_recursive(
                     tf,
-                    cond,
                     while_body.clone(),
                     done.clone(),
                 ));
@@ -528,7 +967,7 @@ impl<'input> elab_ast::Stmt<'input> {
             }
             elab_ast::Stmt::Exp(exp) => {
                 // pure expression guaranteed to have no effects, can omit
-                let (edown, _) = translate_exp(tf, exp);
+                let (edown, _) = exp.translate(tf);
                 edown
             }
         }
@@ -537,7 +976,7 @@ impl<'input> elab_ast::Stmt<'input> {
 
 pub fn translate<'input>(
     elab: elab_ast::Program<'input>,
-    tf: &mut crate::temps::TempFactory,
+    tf: &mut TempFactory,
 ) -> tree::Program {
     let stmt: elab_ast::Stmt = elab.into();
     stmt.translate_iterative(tf).into()
