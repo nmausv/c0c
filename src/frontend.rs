@@ -146,7 +146,6 @@ mod elaborate_tests {
     }
 
     #[test]
-    #[ignore = "C0 specification doesn't mention double declares, so this test is not necessary"]
     fn double_declare_scopes() {
         let input_scope = "int main(){int x = 0; { int x = 1; } return x;}";
         let input_noscope = "int main(){int x = 0; int x = 1; return x;}";

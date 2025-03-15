@@ -63,21 +63,28 @@ fn compile(
 ) -> Result<String, ()> {
     let lexer = frontend::lexer::Lexer::new_c0c_lexer(program);
     let parser = frontend::c0parser::ProgramParser::new();
+
+    if verbose {
+        println!("attempting parsing...\n");
+        println!("program read as:\n{program}\n");
+    }
     let ast = match parser.parse(program, lexer) {
         Ok(p) => p,
         Err(_) => {
-            eprint!("failed parsing...");
+            if verbose {
+                eprint!("failed parsing...");
+            }
             return Err(());
         }
     };
     if verbose {
         println!("program successfully parsed into AST");
-        // println!("program parsed as:\n{ast}\n");
+        println!("program parsed as:\n{ast}\n");
     }
     let elab_ast = frontend::elaboration::elaborate(ast)?;
     if verbose {
         println!("AST successfully elaborated");
-        // println!("program elaborated to:\n{elab_ast}\n");
+        println!("program elaborated to:\n{elab_ast}\n");
     }
     if !static_analysis::check(&elab_ast) {
         if verbose {
@@ -93,13 +100,13 @@ fn compile(
     let ir_tree = translation::translate(elab_ast, &mut tf);
     if verbose {
         println!("elaborated AST translated to IR");
-        // println!("program translated to:\n{ir_tree}\n");
+        println!("program translated to:\n{ir_tree}\n");
     }
 
     let abstract_assembly = codegen::codegen(ir_tree, target, &mut tf);
     if verbose {
         println!("final output generated from IR");
-        // println!("final output:\n{abstract_assembly}\n");
+        println!("final output:\n{abstract_assembly}\n");
     }
 
     Ok(abstract_assembly)
@@ -131,7 +138,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs::{read_dir, read_to_string},
+        fs::{read_dir, File},
+        io::Read,
         sync::{Arc, Mutex},
         thread,
     };
@@ -163,9 +171,7 @@ mod tests {
     }
 
     fn test_file(file: String, path: &str, verbose: bool) -> bool {
-        let expected = get_test_result(&file).unwrap_or_else(|| {
-            panic!("test file {path} should have valid expected result")
-        });
+        let expected = get_test_result(&file).unwrap_or_else(|| panic!());
 
         // compile each file without verbose mode
         let output =
@@ -177,14 +183,12 @@ mod tests {
             TestResult::DivZero => output.is_ok(),
         } {
             eprintln!(
-                "file {} did not pass: expected {:?}, got success result {}",
+                "file {} did not pass: expected {:?}, got success result {:?}",
                 path,
                 expected,
                 output.is_ok(),
             );
             return false;
-        } else {
-            eprintln!("passed");
         }
 
         // TODO
@@ -200,6 +204,7 @@ mod tests {
         let files = read_dir(path).expect("testing directory should exist");
         let results = Arc::new(Mutex::new(Vec::new()));
 
+        #[derive(Debug)]
         enum TestResult {
             Success(String),
             Failure(String),
@@ -212,44 +217,30 @@ mod tests {
             let path = entry.path();
             let path_str = path.to_str().unwrap().to_string();
 
-            eprint!("testing {path_str}...");
-
-            let file = match read_to_string(entry.path()) {
-                Ok(s) => s,
-                Err(_) => {
-                    results
-                        .lock()
-                        .unwrap()
-                        .push(TestResult::Failure(path_str.to_string()));
-                    continue;
-                }
-            };
+            let mut file = File::open(&path_str).unwrap();
+            let mut buf = Vec::new();
+            let _ = file.read_to_end(&mut buf);
+            let content = String::from_utf8_lossy(&buf).into_owned();
 
             let results = results.clone();
 
             test_threads.push(thread::spawn(move || {
-                if !test_file(file, &path_str, false) {
-                    results
-                        .lock()
-                        .unwrap()
-                        .push(TestResult::Failure(path_str.to_string()));
-                } else {
+                if test_file(content, &path_str, false) {
                     results
                         .lock()
                         .unwrap()
                         .push(TestResult::Success(path_str.to_string()));
+                } else {
+                    results
+                        .lock()
+                        .unwrap()
+                        .push(TestResult::Failure(path_str.to_string()));
                 }
             }));
         }
 
         for handle in test_threads {
-            match handle.join() {
-                Ok(()) => (),
-                Err(e) => {
-                    eprintln!("test panic: {:?}", e);
-                    panic!();
-                }
-            }
+            if let Ok(()) = handle.join() {};
         }
 
         let mut passed = 0;
@@ -269,11 +260,20 @@ mod tests {
         );
 
         if failed > 0 {
+            let _: Vec<_> = results
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|t| matches!(t, TestResult::Failure(_)))
+                .map(|t| eprintln!("{t:?}"))
+                .collect();
             panic!();
         }
     }
 
     mod l1 {
+        use std::{fs::File, io::Read};
+
         use super::*;
 
         #[test]
@@ -288,18 +288,38 @@ mod tests {
 
         #[test]
         fn wip() {
-            // bellsprout-return02-l2.l1
-            // simeonpoisson-randomizedlarge.l1
-            // maryammirzakhani-chinese.l1
-            // kelen-success4.l1
-            // beorn-ret_negation.l1
+            let problem_files = vec![
+                /*
+                "tests/l1-large/bellsprout-return02-l2.l1",
+                "tests/l1-large/simeonpoisson-randomizedlarge.l1",
+                "tests/l1-large/maryammirzakhani-chinese.l1",
+                "tests/l1-large/kelen-success4.l1",
+                "tests/l1-large/beorn-ret_negation.l1",
+                "tests/l1-large/theoden-binsource.l1",
+                "tests/l1-large/kelen-failcompile4.l1",
+                "tests/l1-large/sodium-whitespace_return.l1",
+                "tests/l1-large/indiana-hardreturn1.l1",
+                "tests/l1-large/dawn-undeclared_var_2.l1",
+                "tests/l1-large/elendil-specialchars-l2.l1",
+                "tests/l1-large/nicolotartaglia-whitespace.l1",
+                "tests/l1-large/isildur-return05-l2.l1",
+                "tests/l1-large/manganese-return05-l2.l1",
+                "tests/l1-large/lammergeier-ascii-whitespace.l1",
+                "tests/l1-large/hawk-ish-on-spec.l1",
+                */
+                /*
+                here */
+                "tests/l1-basic/exception03.l1",
+            ];
 
-            let path = "tests/l1-large/kelen-success4.l1";
-            let file = read_to_string(path).unwrap();
+            for path in problem_files {
+                let mut file = File::open(path).unwrap();
+                let mut buf = Vec::new();
+                let _ = file.read_to_end(&mut buf);
+                let content = String::from_utf8_lossy(&buf).into_owned();
 
-            thread::spawn(|| assert!(test_file(file, path, true)))
-                .join()
-                .unwrap()
+                assert!(test_file(content, path, true));
+            }
         }
     }
 }

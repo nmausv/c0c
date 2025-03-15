@@ -29,6 +29,18 @@ impl From<Temp> for String {
     }
 }
 
+impl From<Temp> for Rc<str> {
+    fn from(value: Temp) -> Self {
+        value.0
+    }
+}
+
+impl From<Rc<str>> for Temp {
+    fn from(value: Rc<str>) -> Self {
+        Self(value)
+    }
+}
+
 impl std::fmt::Display for Temp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
