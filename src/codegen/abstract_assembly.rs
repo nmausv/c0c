@@ -61,12 +61,34 @@ impl std::fmt::Display for Instruction {
     }
 }
 
-pub type Destination = Operand;
+#[derive(PartialEq, Eq, Clone, Hash, Debug)]
+pub enum Destination {
+    Register(Register),
+    Temp(Temp),
+}
+
+impl std::fmt::Display for Destination {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Destination::Register(register) => write!(f, "{register}"),
+            Destination::Temp(temp) => write!(f, "{temp}"),
+        }
+    }
+}
+
 pub type Source = Operand;
 
-#[derive(PartialEq, Eq, Clone, Hash, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Hash, Debug)]
 pub enum Register {
     Return,
+}
+
+impl std::fmt::Display for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Register::Return => write!(f, "r_ret"),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Clone, Hash, Debug)]
@@ -74,6 +96,15 @@ pub enum Operand {
     Register(Register),
     IntConst(i32),
     Temp(Temp),
+}
+
+impl From<Destination> for Operand {
+    fn from(value: Destination) -> Self {
+        match value {
+            Destination::Register(reg) => Operand::Register(reg),
+            Destination::Temp(temp) => Operand::Temp(temp),
+        }
+    }
 }
 
 impl std::fmt::Display for Operand {
@@ -148,23 +179,27 @@ impl tree::PureExp {
                 }]
             }
             PureExp::PureBinop(e1, op, e2) => {
-                let t1 = Operand::Temp(tf.make_temp());
-                let t2 = Operand::Temp(tf.make_temp());
+                let t1 = Destination::Temp(tf.make_temp());
+                let t2 = Destination::Temp(tf.make_temp());
                 let mut first = e1.cogen_recursive(t1.clone(), tf);
                 let mut second = e2.cogen_recursive(t2.clone(), tf);
                 first.append(&mut second);
                 first.push(Instruction::Binop {
                     d: dest,
-                    s1: t1,
+                    s1: t1.into(),
                     op: crate::frontend::ast::Binop::from(op),
-                    s2: t2,
+                    s2: t2.into(),
                 });
                 first
             }
             PureExp::Unop(op, exp) => {
-                let t1 = Operand::Temp(tf.make_temp());
+                let t1 = Destination::Temp(tf.make_temp());
                 let mut instructions = exp.cogen_recursive(t1.clone(), tf);
-                instructions.push(Instruction::Unop { d: dest, op, s: t1 });
+                instructions.push(Instruction::Unop {
+                    d: dest,
+                    op,
+                    s: t1.into(),
+                });
 
                 instructions
             }
@@ -202,22 +237,22 @@ impl tree::PureExp {
                     right,
                 } => match (left, right) {
                     (New(left), New(right)) => {
-                        let t1 = Operand::Temp(tf.make_temp());
+                        let t1 = Destination::Temp(tf.make_temp());
                         stack.push(ExpFrame::PureBinop {
                             dest,
-                            left: Done(t1.clone()),
+                            left: Done(t1.clone().into()),
                             op,
                             right: New(right),
                         });
                         stack.push(ExpFrame::new(left, t1));
                     }
                     (Done(t1), New(right)) => {
-                        let t2 = Operand::Temp(tf.make_temp());
+                        let t2 = Destination::Temp(tf.make_temp());
                         stack.push(ExpFrame::PureBinop {
                             dest,
                             left: Done(t1),
                             op,
-                            right: Done(t2.clone()),
+                            right: Done(t2.clone().into()),
                         });
                         stack.push(ExpFrame::new(right, t2));
                     }
@@ -233,11 +268,11 @@ impl tree::PureExp {
                 },
                 ExpFrame::Unop { dest, op, exp } => match exp {
                     New(exp) => {
-                        let t = Operand::Temp(tf.make_temp());
+                        let t = Destination::Temp(tf.make_temp());
                         stack.push(ExpFrame::Unop {
                             dest,
                             op,
-                            exp: Done(t.clone()),
+                            exp: Done(t.clone().into()),
                         });
                         stack.push(ExpFrame::new(exp, t));
                     }
@@ -263,28 +298,28 @@ fn cogen_command(
 ) -> Vec<Instruction> {
     match command {
         Command::Return(e) => {
-            let return_register = Operand::Register(Register::Return);
+            let return_register = Destination::Register(Register::Return);
             let mut program = e.cogen(return_register, tf);
             program.push(Instruction::Return);
             program
         }
-        Command::Store(var, e) => e.cogen(Operand::Temp(var.into()), tf),
+        Command::Store(var, e) => e.cogen(Destination::Temp(var.into()), tf),
         Command::StoreImpureBinop {
             dest,
             left,
             op,
             right,
         } => {
-            let t1 = Operand::Temp(tf.make_temp());
-            let t2 = Operand::Temp(tf.make_temp());
+            let t1 = Destination::Temp(tf.make_temp());
+            let t2 = Destination::Temp(tf.make_temp());
             let mut first = left.cogen(t1.clone(), tf);
             let mut second = right.cogen(t2.clone(), tf);
             first.append(&mut second);
             first.push(Instruction::Binop {
-                d: Operand::Temp(dest.into()),
-                s1: t1,
+                d: Destination::Temp(dest.into()),
+                s1: t1.into(),
                 op: crate::frontend::ast::Binop::from(op),
-                s2: t2,
+                s2: t2.into(),
             });
             first
         }
@@ -296,8 +331,8 @@ fn cogen_command(
             branch_false,
         } => {
             // compute left, right
-            let t1 = Operand::Temp(tf.make_temp());
-            let t2 = Operand::Temp(tf.make_temp());
+            let t1 = Destination::Temp(tf.make_temp());
+            let t2 = Destination::Temp(tf.make_temp());
 
             let mut left_instr = left.cogen(t1.clone(), tf);
             let mut right_instr = right.cogen(t2.clone(), tf);
@@ -305,9 +340,9 @@ fn cogen_command(
             left_instr.append(&mut right_instr);
 
             left_instr.push(Instruction::If {
-                left: t1,
+                left: t1.into(),
                 comp: crate::frontend::ast::Binop::from(comp),
-                right: t2,
+                right: t2.into(),
                 branch_true,
                 branch_false,
             });
@@ -335,7 +370,7 @@ mod abs_asm_tests {
 
     use crate::{codegen::abstract_assembly::ir_to_abstract, temps::Label};
 
-    use super::{Instruction, Operand, Register};
+    use super::{Destination, Instruction, Operand, Register};
 
     /// stores the instruction number that caused the error
     #[derive(Debug, PartialEq, Eq)]
@@ -345,29 +380,36 @@ mod abs_asm_tests {
         UnknownLabel(Label),
     }
 
+    fn get<'a, 'b>(
+        state: &'a HashMap<Destination, i32>,
+        d: &'b Operand,
+    ) -> Option<i32>
+    where
+        'a: 'b,
+    {
+        match d {
+            Operand::Register(register) => {
+                state.get(&Destination::Register(*register)).copied()
+            }
+            Operand::Temp(temp) => {
+                state.get(&Destination::Temp(temp.clone())).copied()
+            }
+            Operand::IntConst(n) => Some(*n),
+        }
+    }
+
     /// returns Ok(Some(n)) if the instruction returns n, Ok(None) if the
     /// instruction executed correctly but did not return anything
     /// Err(..) if the instruction could not execute
     fn execute_abs_instruction(
-        state: &mut HashMap<Operand, i32>,
+        state: &mut HashMap<Destination, i32>,
         program: &[Instruction],
         ip: &mut usize,
     ) -> Result<Option<i32>, SimulationError> {
         match &program[*ip] {
-            Instruction::Move {
-                d: Operand::IntConst(_),
-                s: _,
-            } => Err(SimulationError::MoveIntoConst(*ip)),
-            Instruction::Move {
-                d,
-                s: Operand::IntConst(n),
-            } => {
-                state.insert(d.clone(), *n);
-                Ok(None)
-            }
             Instruction::Move { d, s } => {
-                let stored_s = match state.get(s) {
-                    Some(n) => *n,
+                let stored_s = match get(state, s) {
+                    Some(n) => n,
                     None => {
                         return Err(SimulationError::UninitializedVariable(*ip))
                     }
@@ -376,27 +418,17 @@ mod abs_asm_tests {
                 Ok(None)
             }
             Instruction::Binop { d, s1, op, s2 } => {
-                let stored_s1 = match s1 {
-                    Operand::IntConst(n) => *n,
-                    _ => match state.get(s1) {
-                        Some(n) => *n,
-                        None => {
-                            return Err(SimulationError::UninitializedVariable(
-                                *ip,
-                            ))
-                        }
-                    },
+                let stored_s1 = match get(state, s1) {
+                    Some(n) => n,
+                    None => {
+                        return Err(SimulationError::UninitializedVariable(*ip))
+                    }
                 };
-                let stored_s2 = match s2 {
-                    Operand::IntConst(n) => *n,
-                    _ => match state.get(s2) {
-                        Some(n) => *n,
-                        None => {
-                            return Err(SimulationError::UninitializedVariable(
-                                *ip,
-                            ))
-                        }
-                    },
+                let stored_s2 = match get(state, s2) {
+                    Some(n) => n,
+                    None => {
+                        return Err(SimulationError::UninitializedVariable(*ip))
+                    }
                 };
                 let result = match op {
                     crate::frontend::ast::Binop::Plus => stored_s1 + stored_s2,
@@ -416,7 +448,7 @@ mod abs_asm_tests {
             }
             Instruction::Return => Ok(Some(
                 *state
-                    .get(&Operand::Register(Register::Return))
+                    .get(&Destination::Register(Register::Return))
                     .expect("program state should have the given value mapped"),
             )),
             Instruction::Unop { .. } => todo!(),
@@ -427,13 +459,13 @@ mod abs_asm_tests {
                 branch_true,
                 branch_false,
             } => {
-                let left = match state.get(left) {
+                let left = match get(state, left) {
                     Some(val) => val,
                     None => {
                         return Err(SimulationError::UninitializedVariable(*ip))
                     }
                 };
-                let right = match state.get(right) {
+                let right = match get(state, right) {
                     Some(val) => val,
                     None => {
                         return Err(SimulationError::UninitializedVariable(*ip))
@@ -503,7 +535,7 @@ mod abs_asm_tests {
     fn abs_asm_runner(
         program: &[Instruction],
     ) -> Result<Option<i32>, SimulationError> {
-        let mut state: HashMap<Operand, i32> = HashMap::new();
+        let mut state: HashMap<_, _> = HashMap::new();
         let mut ip = 0;
 
         loop {
@@ -535,10 +567,10 @@ mod abs_asm_tests {
         // r_ret <- t4      = 1
         // return
 
-        let t1 = Operand::Temp(String::from("t1").into());
-        let t2 = Operand::Temp(String::from("t2").into());
-        let t3 = Operand::Temp(String::from("t3").into());
-        let t4 = Operand::Temp(String::from("t4").into());
+        let t1 = Destination::Temp(String::from("t1").into());
+        let t2 = Destination::Temp(String::from("t2").into());
+        let t3 = Destination::Temp(String::from("t3").into());
+        let t4 = Destination::Temp(String::from("t4").into());
         let program = vec![
             Instruction::Binop {
                 d: t1.clone(),
@@ -548,25 +580,25 @@ mod abs_asm_tests {
             },
             Instruction::Binop {
                 d: t2.clone(),
-                s1: t1.clone(),
+                s1: t1.clone().into(),
                 op: crate::frontend::ast::Binop::Minus,
                 s2: Operand::IntConst(5),
             },
             Instruction::Binop {
                 d: t3.clone(),
-                s1: t2.clone(),
+                s1: t2.clone().into(),
                 op: crate::frontend::ast::Binop::Times,
                 s2: Operand::IntConst(6),
             },
             Instruction::Binop {
                 d: t4.clone(),
-                s1: t3.clone(),
+                s1: t3.clone().into(),
                 op: crate::frontend::ast::Binop::Modulo,
                 s2: Operand::IntConst(5),
             },
             Instruction::Move {
-                d: Operand::Register(Register::Return),
-                s: t4.clone(),
+                d: Destination::Register(Register::Return),
+                s: t4.clone().into(),
             },
             Instruction::Return,
         ];

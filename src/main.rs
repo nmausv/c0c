@@ -8,7 +8,6 @@
 mod codegen;
 mod frontend;
 mod heap_recursion;
-mod regalloc;
 mod static_analysis;
 mod temps;
 mod translation;
