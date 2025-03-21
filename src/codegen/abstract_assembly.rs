@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::frontend::ast::Binop;
 use crate::frontend::elab_ast::{PureBinop, Unop};
 use crate::heap_recursion::FrameProgress::{self, Done, New};
 use crate::temps::{Label, Temp, TempFactory};
@@ -10,24 +11,24 @@ type Program = Vec<Instruction>;
 pub enum Instruction {
     Move {
         d: Destination,
-        s: Source,
+        s: Operand,
     },
     Binop {
         d: Destination,
-        s1: Source,
-        op: crate::frontend::ast::Binop,
-        s2: Source,
+        s1: Operand,
+        op: Binop,
+        s2: Operand,
     },
     Unop {
         d: Destination,
-        op: crate::frontend::ast::Unop,
-        s: Source,
+        op: Unop,
+        s: Operand,
     },
     Return,
     If {
-        left: Source,
-        comp: crate::frontend::ast::Binop,
-        right: Source,
+        left: Operand,
+        comp: Binop,
+        right: Operand,
         branch_true: Label,
         branch_false: Label,
     },
@@ -67,6 +68,29 @@ pub enum Destination {
     Temp(Temp),
 }
 
+impl From<Register> for Destination {
+    fn from(value: Register) -> Self {
+        Destination::Register(value)
+    }
+}
+
+impl From<Temp> for Destination {
+    fn from(value: Temp) -> Self {
+        Destination::Temp(value)
+    }
+}
+
+impl TryFrom<Operand> for Destination {
+    type Error = ();
+    fn try_from(value: Operand) -> Result<Self, Self::Error> {
+        match value {
+            Operand::Register(register) => Ok(Destination::Register(register)),
+            Operand::IntConst(_) => Err(()),
+            Operand::Temp(temp) => Ok(Destination::Temp(temp)),
+        }
+    }
+}
+
 impl std::fmt::Display for Destination {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -76,17 +100,23 @@ impl std::fmt::Display for Destination {
     }
 }
 
-pub type Source = Operand;
-
+/// Note that the `Return` register pulls double duty:
+///     1. standard return register
+///     2. stores the quotient of division/modulo operations
+///
+/// Additionally, the `Remainder` register stores the
+/// remainder of division/modulo operations.
 #[derive(PartialEq, Eq, Clone, Copy, Hash, Debug)]
 pub enum Register {
     Return,
+    Remainder,
 }
 
 impl std::fmt::Display for Register {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Register::Return => write!(f, "r_ret"),
+            Register::Remainder => write!(f, "r_rem"),
         }
     }
 }
@@ -112,7 +142,7 @@ impl std::fmt::Display for Operand {
         match self {
             Self::IntConst(n) => write!(f, "{n}"),
             Self::Temp(t) => write!(f, "{t}"),
-            Self::Register(Register::Return) => write!(f, "r_ret"),
+            Self::Register(reg) => write!(f, "{reg}"),
         }
     }
 }
@@ -318,9 +348,10 @@ fn cogen_command(
             first.push(Instruction::Binop {
                 d: Destination::Temp(dest.into()),
                 s1: t1.into(),
-                op: crate::frontend::ast::Binop::from(op),
+                op: op.into(),
                 s2: t2.into(),
             });
+
             first
         }
         Command::If {
@@ -341,7 +372,7 @@ fn cogen_command(
 
             left_instr.push(Instruction::If {
                 left: t1.into(),
-                comp: crate::frontend::ast::Binop::from(comp),
+                comp: comp.into(),
                 right: t2.into(),
                 branch_true,
                 branch_false,
@@ -354,10 +385,7 @@ fn cogen_command(
     }
 }
 
-pub fn ir_to_abstract(
-    ir: tree::Program,
-    tf: &mut crate::temps::TempFactory,
-) -> Program {
+pub fn ir_to_abstract(ir: tree::Program, tf: &mut TempFactory) -> Program {
     ir.into_iter()
         .flat_map(|command| cogen_command(command, tf))
         .collect()

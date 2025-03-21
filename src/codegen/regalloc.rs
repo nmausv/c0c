@@ -5,81 +5,15 @@ use std::{
 
 use crate::{
     codegen::abstract_assembly::{Destination, Instruction, Operand, Register},
-    temps::Temp,
+    frontend::ast::Binop,
 };
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-enum Variable {
-    Temp(Temp),
-    Register(Register),
-}
-
-impl std::fmt::Display for Variable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Variable::Temp(temp) => write!(f, "{temp}"),
-            Variable::Register(register) => write!(f, "{register}"),
-        }
-    }
-}
-
-impl PartialEq<Operand> for Variable {
+impl PartialEq<Operand> for Destination {
     fn eq(&self, other: &Operand) -> bool {
         match (self, other) {
-            (Variable::Temp(t1), Operand::Temp(t2)) => t1 == t2,
-            (Variable::Register(r1), Operand::Register(r2)) => r1 == r2,
+            (Destination::Temp(t1), Operand::Temp(t2)) => t1 == t2,
+            (Destination::Register(r1), Operand::Register(r2)) => r1 == r2,
             _ => false,
-        }
-    }
-}
-
-impl PartialEq<Destination> for Variable {
-    fn eq(&self, other: &Destination) -> bool {
-        match (self, other) {
-            (Variable::Temp(t1), Destination::Temp(t2)) => t1 == t2,
-            (Variable::Register(r1), Destination::Register(r2)) => r1 == r2,
-            _ => false,
-        }
-    }
-}
-
-impl From<Variable> for Operand {
-    fn from(value: Variable) -> Self {
-        match value {
-            Variable::Temp(temp) => Operand::Temp(temp),
-            Variable::Register(register) => Operand::Register(register),
-        }
-    }
-}
-
-impl From<Register> for Variable {
-    fn from(value: Register) -> Self {
-        Self::Register(value)
-    }
-}
-
-impl From<Temp> for Variable {
-    fn from(value: Temp) -> Self {
-        Self::Temp(value)
-    }
-}
-
-impl From<Destination> for Variable {
-    fn from(value: Destination) -> Self {
-        match value {
-            Destination::Register(register) => Variable::Register(register),
-            Destination::Temp(temp) => Variable::Temp(temp),
-        }
-    }
-}
-
-impl TryFrom<Operand> for Variable {
-    type Error = ();
-    fn try_from(value: Operand) -> Result<Self, Self::Error> {
-        match value {
-            Operand::Register(register) => Ok(Variable::Register(register)),
-            Operand::IntConst(_) => Err(()),
-            Operand::Temp(temp) => Ok(Variable::Temp(temp)),
         }
     }
 }
@@ -87,8 +21,8 @@ impl TryFrom<Operand> for Variable {
 #[derive(Debug)]
 struct Annotation<'a> {
     instr: &'a Instruction,
-    live_in: HashSet<Variable>,
-    live_out: HashSet<Variable>,
+    live_in: HashSet<Destination>,
+    live_out: HashSet<Destination>,
 }
 
 impl<'a> std::fmt::Display for Annotation<'a> {
@@ -113,7 +47,7 @@ impl<'a> std::fmt::Display for Annotation<'a> {
             }
         }
 
-        write!(f, "{:<16} : {:>16} : {:>16}", line_str, live_in, live_out)
+        write!(f, "{:<24} : {:>24} : {:>24}", line_str, live_in, live_out)
     }
 }
 
@@ -131,7 +65,7 @@ impl<'a> Deref for AnnotatedProgram<'a> {
 
 impl<'a> std::fmt::Display for AnnotatedProgram<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{:<16} : {:>16} : {:>16}", "Line", "Live In", "Live Out")?;
+        writeln!(f, "{:<24} : {:>24} : {:>24}", "Line", "Live In", "Live Out")?;
         for line in &self.data {
             writeln!(f, "{line}")?;
         }
@@ -140,49 +74,61 @@ impl<'a> std::fmt::Display for AnnotatedProgram<'a> {
     }
 }
 
-fn compute_liveness(program: &[Instruction]) -> AnnotatedProgram {
-    let mut annotated: Vec<_> = Vec::with_capacity(program.len());
-    let mut live_in = HashSet::new();
-    let mut live_out;
-    let mut uses;
-    let mut defines;
+impl<'a> AnnotatedProgram<'a> {
+    fn new(program: &'a [Instruction]) -> Self {
+        let mut annotated: Vec<_> = Vec::with_capacity(program.len());
+        let mut live_in = HashSet::new();
+        let mut live_out;
+        let mut uses;
+        let mut defines;
 
-    for instr in program.iter().rev() {
-        uses = instr.uses();
-        defines = instr.defines();
-        // current live out is the previous live in
-        live_out = std::mem::take(&mut live_in);
+        for instr in program.iter().rev() {
+            uses = instr.uses();
+            defines = instr.defines();
+            // current live out is the previous live in
+            live_out = std::mem::take(&mut live_in);
 
-        live_in = uses
-            .union(&live_out.difference(&defines).cloned().collect())
-            .cloned()
-            .collect();
+            live_in = uses
+                .union(&live_out.difference(&defines).cloned().collect())
+                .cloned()
+                .collect();
 
-        annotated.push(Annotation {
-            instr,
-            live_in: live_in.clone(),
-            live_out: live_out.clone(),
-        });
+            annotated.push(Annotation {
+                instr,
+                live_in: live_in.clone(),
+                live_out: live_out.clone(),
+            });
+        }
+
+        annotated.reverse();
+        AnnotatedProgram { data: annotated }
     }
-
-    annotated.reverse();
-    AnnotatedProgram { data: annotated }
 }
 
 impl Instruction {
-    fn uses(&self) -> HashSet<Variable> {
+    fn uses(&self) -> HashSet<Destination> {
         match self {
             Instruction::Move {
                 d: _,
                 s: Operand::IntConst(_),
             } => [].into(),
             Instruction::Move { d: _, s } => {
-                let s: Variable = s.clone().try_into().expect("");
+                let s: Destination = s
+                    .clone()
+                    .try_into()
+                    .expect("should not be IntConst by match guard");
                 [s].into()
             }
-            Instruction::Binop { s1, s2, .. } => {
+            Instruction::Binop { s1, s2, op, .. } => {
                 let mut uses = HashSet::new();
 
+                match op {
+                    Binop::Divide | Binop::Modulo => {
+                        uses.insert(Register::Return.into());
+                        uses.insert(Register::Remainder.into());
+                    }
+                    _ => (),
+                }
                 match s1 {
                     Operand::Register(register) => {
                         uses.insert((*register).into());
@@ -204,7 +150,10 @@ impl Instruction {
 
                 uses
             }
-            Instruction::Unop { .. } => todo!(),
+            Instruction::Unop { s, .. } => {
+                let s: Destination = s.clone().try_into().expect("");
+                [s].into()
+            }
             Instruction::Return => [Register::Return.into()].into(),
             Instruction::If { .. } => todo!(),
             Instruction::Goto(..) => todo!(),
@@ -212,11 +161,11 @@ impl Instruction {
         }
     }
 
-    fn defines(&self) -> HashSet<Variable> {
+    fn defines(&self) -> HashSet<Destination> {
         match self {
             Instruction::Move { d, .. }
             | Instruction::Binop { d, .. }
-            | Instruction::Unop { d, .. } => [d.clone().into()].into(),
+            | Instruction::Unop { d, .. } => [d.clone()].into(),
             Instruction::Return => [].into(),
             Instruction::If { .. } => todo!(),
             Instruction::Goto(..) => todo!(),
@@ -227,7 +176,7 @@ impl Instruction {
 
 #[derive(Debug, Clone)]
 struct InterferenceGraph {
-    neighbors: HashMap<Variable, HashSet<Variable>>,
+    neighbors: HashMap<Destination, HashSet<Destination>>,
 }
 
 impl std::fmt::Display for InterferenceGraph {
@@ -254,30 +203,29 @@ impl InterferenceGraph {
     }
 
     // inserts an edge from s to t in the graph
-    fn insert(&mut self, s: &Variable, t: &Variable) {
+    fn insert(&mut self, s: &Destination, t: &Destination) {
         self.neighbors
             .entry(s.clone())
-            .and_modify(|s_nbors| {
-                s_nbors.insert(t.clone());
-            })
-            .or_insert([t.clone()].into());
+            .or_default()
+            .insert(t.clone());
 
         self.neighbors
             .entry(t.clone())
-            .and_modify(|t_nbors| {
-                t_nbors.insert(s.clone());
-            })
-            .or_insert([s.clone()].into());
+            .or_default()
+            .insert(s.clone());
     }
 
     // creates a graph from an annotated program
     fn new(program: &AnnotatedProgram) -> Self {
         let mut graph = Self::empty();
 
+        // all precolored nodes interfere with each other, ie all registers
+        graph.insert(&Register::Return.into(), &Register::Remainder.into());
+
         for annot in program.iter() {
             match annot.instr {
                 Instruction::Move { d, s } => {
-                    let d: Variable = d.clone().into();
+                    let d: Destination = d.clone();
                     for var in &annot.live_out {
                         if d != *var && *var != *s {
                             graph.insert(&d, var);
@@ -285,14 +233,21 @@ impl InterferenceGraph {
                     }
                 }
                 Instruction::Binop { d, .. } => {
-                    let d: Variable = d.clone().into();
+                    let d: Destination = d.clone();
                     for var in &annot.live_out {
                         if d != *var {
                             graph.insert(&d, var);
                         }
                     }
                 }
-                Instruction::Unop { .. } => todo!(),
+                Instruction::Unop { d, .. } => {
+                    let d: Destination = d.clone();
+                    for var in &annot.live_out {
+                        if d != *var {
+                            graph.insert(&d, var);
+                        }
+                    }
+                }
                 Instruction::Return => (),
                 Instruction::If { .. } => todo!(),
                 Instruction::Goto(..) => todo!(),
@@ -302,12 +257,231 @@ impl InterferenceGraph {
 
         graph
     }
+
+    /// Maximum Cardinality Search over the given graph,
+    /// returns a Simplical Elimination Ordering
+    fn mcs<'a>(&'a self) -> Vec<Destination> {
+        let mut ordering = Vec::new();
+
+        // note: registers need to be added in a fixed order
+        // add all registers every time???
+
+        ordering.push(Register::Return.into());
+        ordering.push(Register::Remainder.into());
+
+        /*
+        for reg in self
+            .neighbors
+            .keys()
+            .filter(|var| matches!(var, Variable::Register(_)))
+        {
+            ordering.push(reg);
+        }
+        */
+
+        let mut remaining: HashSet<&Destination> = self
+            .neighbors
+            .keys()
+            .filter(|var| matches!(var, Destination::Temp(_)))
+            .collect();
+
+        let mut weights: HashMap<&Destination, usize> =
+            self.neighbors.keys().map(|var| (var, 0)).collect();
+
+        while !remaining.is_empty() { // find node v of maximal weight in remaining, unless
+            // a precolored node exists
+            let &v = {
+                remaining
+                    .iter()
+                    .max_by_key(|&&var| weights[var])
+                    .expect("weights should not be empty by loop guard")
+            };
+
+            // put v next in the ordering
+            ordering.push(v.clone());
+
+            // for every neighbor of v still in the remaining set, increment the weight
+            let neighbors = &self.neighbors[v];
+
+            for neighbor in neighbors {
+                weights.entry(neighbor).and_modify(|weight| {
+                    *weight += 1;
+                });
+            }
+
+            // remove v from remaining
+            remaining.remove(v);
+        }
+
+        ordering
+    }
+
+    fn greedy_color(
+        &self,
+        order: &[Destination],
+    ) -> HashMap<Destination, usize> {
+        let mut color_map = HashMap::new();
+        for var in order {
+            let neighbors = &self.neighbors[var];
+
+            // let c be lowest color not used in neighbors(var)
+            let color_set: HashSet<usize> = neighbors
+                .iter()
+                .filter_map(|neighbor| color_map.get(neighbor).copied())
+                .collect();
+            let c = mex(&color_set);
+
+            // color var with c
+            color_map.insert(var.clone(), c);
+        }
+
+        color_map
+    }
+}
+
+fn mex(set: &HashSet<usize>) -> usize {
+    let mut n = 0;
+    loop {
+        if !set.contains(&n) {
+            return n;
+        }
+        n += 1;
+    }
+}
+
+#[derive(Debug)]
+pub struct Coloring {
+    color_map: HashMap<Destination, usize>,
+    colors_used: usize,
 }
 
 pub fn regalloc(program: &[Instruction]) {
-    let annotated = compute_liveness(program);
+    let annotated = AnnotatedProgram::new(program);
     eprintln!("annotated program:\n{annotated}");
 
     let graph = InterferenceGraph::new(&annotated);
     eprintln!("interference graph:\n{graph}");
+
+    let seo = graph.mcs();
+    eprintln!(
+        "seo: \n{}",
+        seo.iter().fold(String::new(), |acc, arg| format!(
+            "{acc}{}, ",
+            &arg.to_string()
+        ))
+    );
+
+    let color_map = graph.greedy_color(&seo);
+    let colors_used = *color_map
+        .values()
+        .max()
+        .expect("should use at least one color")
+        + 1;
+    eprintln!("coloring: \n{color_map:?}");
+    eprintln!("colors used: {colors_used}");
+
+    // can't actually perform the replacement yet, delay until we know which assembly language
+    // we're targeting
+}
+
+#[cfg(test)]
+mod tests {
+    use super::regalloc;
+
+    use crate::codegen::abstract_assembly::{
+        Destination, Instruction, Operand, Register,
+    };
+    use crate::frontend::ast::Binop;
+
+    macro_rules! instr {
+        (ret) => {{
+            Instruction::Return
+        }};
+        (reg ret <- int $src: expr ) => {{
+            Instruction::Move {
+                d: Destination::Register(Register::Return),
+                s: Operand::IntConst($src),
+            }
+        }};
+        (reg rem <- int $src: expr ) => {{
+            Instruction::Move {
+                d: Destination::Register(Register::Remainder),
+                s: Operand::IntConst($src),
+            }
+        }};
+        (var $dest: tt <- int $src: expr) => {{
+            Instruction::Move {
+                d: Destination::Temp($dest.into()),
+                s: Operand::IntConst($src),
+            }
+        }};
+        (reg ret <- reg ret) => {{
+            Instruction::Move {
+                d: Destination::Register(Register::Return),
+                s: Register(Register::Return),
+            }
+        }};
+        (reg ret <- var $src: expr) => {{
+            Instruction::Move {
+                d: Destination::Register(Register::Return),
+                s: Operand::Temp($src.into()),
+            }
+        }};
+        (var $dest: tt <- var $src: expr) => {{
+            Instruction::Move {
+                d: Destination::Temp($dest.into()),
+                s: Operand::Temp($src.into()),
+            }
+        }};
+        (var $dest: tt <- var $lhs: tt + var $rhs: tt) => {{
+            Instruction::Binop {
+                d: Destination::Temp($dest.into()),
+                s1: Operand::Temp($lhs.into()),
+                op: Binop::Plus,
+                s2: Operand::Temp($rhs.into()),
+            }
+        }};
+        (var $dest: tt <- var $lhs: tt / var $rhs: tt) => {{
+            Instruction::Binop {
+                d: Destination::Temp($dest.into()),
+                s1: Operand::Temp($lhs.into()),
+                op: Binop::Divide,
+                s2: Operand::Temp($rhs.into()),
+            }
+        }};
+    }
+
+    #[test]
+    fn example() {
+        let program = vec![
+            instr!(var "x1" <- int 0),
+            instr!(var "x2" <- int 1),
+            instr!(var "x3" <- var "x1" + var "x2"),
+            instr!(var "x4" <- var "x2" + var "x3"),
+            instr!(var "x5" <- var "x3" + var "x4"),
+            instr!(reg ret <- var "x5"),
+            instr!(ret),
+        ];
+
+        regalloc(&program);
+        /*
+        let coloring = regalloc(&program);
+        dbg!(&coloring);
+        assert!(coloring.colors_used == 2);
+        */
+    }
+
+    #[test]
+    fn division() {
+        let program = vec![
+            instr!(reg ret <- int 4),
+            instr!(var "x1" <- int 9),
+            instr!(var "x2" <- int 27),
+            instr!(var "x3" <- var "x2" / var "x1"),
+            instr!(ret),
+        ];
+
+        regalloc(&program);
+        panic!();
+    }
 }

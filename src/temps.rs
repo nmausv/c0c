@@ -17,6 +17,12 @@ use std::rc::Rc;
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct Temp(Rc<str>);
 
+impl From<&str> for Temp {
+    fn from(value: &str) -> Self {
+        Self(value.into())
+    }
+}
+
 impl From<String> for Temp {
     fn from(value: String) -> Self {
         Self(value.into())

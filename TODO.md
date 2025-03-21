@@ -126,3 +126,7 @@
 
 ## Abstract Assembly
 - [x] write a lightweight runner to allow end to end testing
+
+## Register Allocation
+- [ ] ignore for now, simply spill every variable onto the stack, to check for correctness of code generation
+    - [ ] once validated, can implement register allocation
