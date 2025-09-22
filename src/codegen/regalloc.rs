@@ -8,6 +8,8 @@ use crate::{
     frontend::ast::Binop,
 };
 
+const DEBUG: bool = false;
+
 impl PartialEq<Operand> for Destination {
     fn eq(&self, other: &Operand) -> bool {
         match (self, other) {
@@ -288,7 +290,8 @@ impl InterferenceGraph {
         let mut weights: HashMap<&Destination, usize> =
             self.neighbors.keys().map(|var| (var, 0)).collect();
 
-        while !remaining.is_empty() { // find node v of maximal weight in remaining, unless
+        while !remaining.is_empty() {
+            // find node v of maximal weight in remaining, unless
             // a precolored node exists
             let &v = {
                 remaining
@@ -355,21 +358,169 @@ pub struct Coloring {
     colors_used: usize,
 }
 
-pub fn regalloc(program: &[Instruction]) {
+#[derive(Debug, Clone, Copy)]
+pub struct StackLocation {
+    /// offset from the stack pointer
+    pub index: usize,
+    /// in bytes
+    pub size: usize,
+}
+
+impl std::cmp::PartialEq for StackLocation {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
+    }
+}
+
+impl std::cmp::Eq for StackLocation {}
+
+impl std::cmp::PartialOrd for StackLocation {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl std::cmp::Ord for StackLocation {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if self.index < other.index {
+            std::cmp::Ordering::Less
+        } else if self.index == other.index {
+            std::cmp::Ordering::Equal
+        } else {
+            std::cmp::Ordering::Greater
+        }
+    }
+}
+
+fn spill<'a>(variables: Vec<&'a Destination>) -> MemoryMap<'a> {
+    let mut spills = HashMap::new();
+    let mut next_stack_index = 0;
+    for var in variables {
+        // don't put the same destination in different memory locations
+        if spills.contains_key(var) {
+            continue;
+        }
+
+        match var {
+            Destination::Register(reg) => {
+                spills.insert(var, MemoryLocation::Register(*reg));
+            }
+            Destination::Temp(_) => {
+                //TODO
+                // since all variables are 4 bytes right now, can hard code the size
+                let loc = StackLocation {
+                    index: next_stack_index,
+                    size: 4,
+                };
+                next_stack_index += loc.size;
+                spills.insert(var, MemoryLocation::Stack(loc));
+            }
+        }
+    }
+
+    MemoryMap {
+        map: spills,
+        stack_space: next_stack_index,
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum MemoryLocation {
+    Stack(StackLocation),
+    Register(Register),
+}
+
+impl std::fmt::Display for MemoryLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MemoryLocation::Stack(stack) => {
+                write!(f, "stack slot {}, size {}", stack.index, stack.size)
+            }
+            MemoryLocation::Register(reg) => {
+                write!(f, "{reg}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryMap<'a> {
+    pub map: HashMap<&'a Destination, MemoryLocation>,
+    pub stack_space: usize,
+}
+
+impl<'a> std::fmt::Display for MemoryMap<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "stack space used: {}", self.stack_space)?;
+
+        for (var, loc) in &self.map {
+            writeln!(f, "variable {var} lives in {loc}")?;
+        }
+
+        writeln!(f)?;
+
+        writeln!(f, "stack diagram")?;
+
+        let mut stack: Vec<(&Destination, StackLocation)> = self
+            .map
+            .iter()
+            .filter_map(|(var, loc)| match loc {
+                MemoryLocation::Stack(stack_loc) => Some((*var, *stack_loc)),
+                _ => None,
+            })
+            .collect();
+
+        stack.sort_by(|&(_, loc1), &(_, loc2)| loc1.cmp(&loc2));
+
+        for (var, loc) in stack {
+            writeln!(f, "{:<8} : {:>8}", loc.index, var)?
+        }
+
+        Ok(())
+    }
+}
+
+pub fn regalloc(program: &[Instruction], optimization: usize) -> MemoryMap {
+    if optimization == 0 {
+        let variables: Vec<_> = program
+            .iter()
+            .filter_map(|i| match i {
+                Instruction::Move { d, .. } => Some(d),
+                Instruction::Binop { d, .. } => Some(d),
+                Instruction::Unop { d, .. } => Some(d),
+                Instruction::Return => None,
+                Instruction::If { .. } => None,
+                Instruction::Goto(..) => None,
+                Instruction::Label(..) => None,
+            })
+            .collect();
+
+        return spill(variables);
+    }
+
+    todo!("intelligent register allocation");
+
+    #[allow(unreachable_code)]
     let annotated = AnnotatedProgram::new(program);
-    eprintln!("annotated program:\n{annotated}");
+    if DEBUG {
+        eprintln!("annotated program:\n{annotated}");
+    }
 
     let graph = InterferenceGraph::new(&annotated);
-    eprintln!("interference graph:\n{graph}");
+    if DEBUG {
+        eprintln!("interference graph:\n{graph}");
+    }
 
     let seo = graph.mcs();
-    eprintln!(
-        "seo: \n{}",
-        seo.iter().fold(String::new(), |acc, arg| format!(
-            "{acc}{}, ",
-            &arg.to_string()
-        ))
-    );
+    if DEBUG {
+        eprintln!(
+            "seo: \n{}",
+            seo.iter().fold(String::new(), |acc, arg| format!(
+                "{acc}{}, ",
+                &arg.to_string()
+            ))
+        );
+    }
 
     let color_map = graph.greedy_color(&seo);
     let colors_used = *color_map
@@ -377,11 +528,13 @@ pub fn regalloc(program: &[Instruction]) {
         .max()
         .expect("should use at least one color")
         + 1;
-    eprintln!("coloring: \n{color_map:?}");
-    eprintln!("colors used: {colors_used}");
-
+    if DEBUG {
+        eprintln!("coloring: \n{color_map:?}");
+        eprintln!("colors used: {colors_used}");
+    }
     // can't actually perform the replacement yet, delay until we know which assembly language
     // we're targeting
+    todo!()
 }
 
 #[cfg(test)]
@@ -463,7 +616,7 @@ mod tests {
             instr!(ret),
         ];
 
-        regalloc(&program);
+        regalloc(&program, 1);
         /*
         let coloring = regalloc(&program);
         dbg!(&coloring);
@@ -481,7 +634,7 @@ mod tests {
             instr!(ret),
         ];
 
-        regalloc(&program);
+        regalloc(&program, 1);
         panic!();
     }
 }

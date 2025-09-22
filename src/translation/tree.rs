@@ -86,7 +86,7 @@ impl std::fmt::Display for PureExp {
         match self {
             Self::Num(n) => write!(f, "{n}"),
             Self::Ident(var) => write!(f, "{var}"),
-            Self::PureBinop(e1, op, e2) => write!(f, "{e1} {op} {e2}"),
+            Self::PureBinop(e1, op, e2) => write!(f, "({e1} {op} {e2})"),
             Self::Unop(op, exp) => write!(f, "{op}({exp})"),
         }
     }

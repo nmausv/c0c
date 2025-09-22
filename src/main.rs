@@ -12,7 +12,7 @@ mod static_analysis;
 mod temps;
 mod translation;
 
-use std::fs::read_to_string;
+use std::{fs::read_to_string, io::Write};
 
 use clap::{Parser, ValueEnum};
 
@@ -102,22 +102,22 @@ fn compile(
         println!("program translated to:\n{ir_tree}\n");
     }
 
-    let abstract_assembly = codegen::codegen(ir_tree, target, &mut tf);
+    let assembly = codegen::codegen(ir_tree, target, &mut tf);
     if verbose {
         println!("final output generated from IR");
-        println!("final output:\n{abstract_assembly}\n");
+        println!("final output:\n{assembly}\n");
     }
 
-    Ok(abstract_assembly)
+    Ok(assembly)
 }
 
 fn main() {
     // handle command line arguments
     let cli = Args::parse();
 
-    println!("cli input: {:?}", cli.input);
-    println!("cli output: {:?}", cli.output);
-    println!("cli target: {:?}", cli.target);
+    eprintln!("cli input: {:?}", cli.input);
+    eprintln!("cli output: {:?}", cli.output);
+    eprintln!("cli target: {:?}", cli.target);
 
     let program = match read_to_string(&cli.input) {
         Ok(s) => s,
@@ -127,8 +127,29 @@ fn main() {
         }
     };
 
-    if compile(&program, cli.verbose, cli.target.into()).is_err() {
-        println!("could not compile");
+    let output = match compile(&program, cli.verbose, cli.target.into()) {
+        Ok(s) => s,
+        Err(()) => {
+            eprintln!("could not compile");
+            return;
+        }
+    };
+
+    let outfile_path = match cli.output {
+        Some(_) => cli.output.as_ref().unwrap(),
+        None => "a.out",
+    };
+
+    let mut outfile_options = std::fs::File::options();
+    outfile_options.create(true);
+    outfile_options.write(true);
+    match outfile_options.open(outfile_path) {
+        Ok(mut outfile) => {
+            outfile.write_all(output.as_bytes()).unwrap_or_else(|_| {
+                panic!("could not write to file {outfile_path}")
+            });
+        }
+        Err(e) => eprintln!("could not open file {outfile_path}: {e}"),
     }
 
     println!("done!");
@@ -137,18 +158,18 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs::{read_dir, File},
-        io::Read,
-        sync::{Arc, Mutex},
+        fs::{read_dir, remove_file, File},
+        io::{Read, Write},
+        process::Command,
         thread,
     };
 
     use crate::compile;
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq)]
     enum TestResult {
-        Return(i64), // compile and return value
-        DivZero,     // compile but raise divzero
-        Error,       // fail to compile
+        Return(u8), // compile and return value
+        DivZero,    // compile but raise divzero
+        Error,      // fail to compile
     }
 
     fn get_test_result(contents: &str) -> Option<TestResult> {
@@ -156,8 +177,14 @@ mod tests {
         let line = contents.lines().next()?.trim();
 
         if line.starts_with("//test return ") {
-            match line.strip_prefix("//test return ")?.parse::<i64>() {
-                Ok(result) => Some(TestResult::Return(result)),
+            match line.strip_prefix("//test return ")?.parse::<i32>() {
+                Ok(result) => {
+                    // note that exit codes are the current method to interact
+                    // with executables, and exit codes are truncated to one
+                    // unsigned byte, so the intended return value should also
+                    // be truncated.
+                    Some(TestResult::Return(result as u8))
+                }
                 Err(_) => None,
             }
         } else if line.starts_with("//test div-by-zero") {
@@ -170,11 +197,13 @@ mod tests {
     }
 
     fn test_file(file: String, path: &str, verbose: bool) -> bool {
-        let expected = get_test_result(&file).unwrap_or_else(|| panic!());
+        let expected = match get_test_result(&file) {
+            Some(result) => result,
+            None => return false,
+        };
 
         // compile each file without verbose mode
-        let output =
-            compile(&file, verbose, crate::codegen::Target::AbstractAssembly);
+        let output = compile(&file, verbose, crate::codegen::Target::ARM);
 
         if !match expected {
             TestResult::Return(_) => output.is_ok(),
@@ -190,18 +219,102 @@ mod tests {
             return false;
         }
 
-        // TODO
-        // save to output file
-        // run output file
-        // test against expected output
-        // delete output file
+        let Ok(output) = output else {
+            return true;
+        };
+        let output = output.into_bytes();
 
-        true
+        // TODO
+
+        // save to output file
+        let assembly_path = path
+            .strip_suffix(".l1")
+            .map_or(format!("{path}.s"), |name| format!("{name}.s"));
+        let executable_path = path
+            .strip_suffix(".l1")
+            .map_or(path.to_string(), |name| name.to_string());
+        let mut outfile = match File::create(&assembly_path) {
+            Ok(outfile) => outfile,
+            Err(e) => {
+                eprintln!("could not create output file for {path}: {e}");
+                return false;
+            }
+        };
+
+        let mut bytes_written = 0;
+        while bytes_written < output.len() {
+            bytes_written += match outfile.write(&output[bytes_written..]) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("could not write to output file for {path}: {e}");
+                    return false;
+                }
+            };
+        }
+
+        // run output file
+
+        // TODO
+        let mut clang = Command::new("clang");
+        clang.arg(&assembly_path);
+        clang.arg("-o").arg(&executable_path);
+        let clang_output = clang.output();
+
+        remove_file(&assembly_path).unwrap_or_else(|e| {
+            panic!("could not remove file {assembly_path}: {e}")
+        });
+
+        match clang_output {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("linking or assembling failed: {e}");
+                return false;
+            }
+        }
+
+        let mut executable = Command::new(&executable_path);
+        let executable_output = executable.status();
+
+        remove_file(&executable_path).unwrap_or_else(|e| {
+            panic!("could not remove file {executable_path}: {e}")
+        });
+
+        // test against expected output
+        // NOTE: ARM does not create an interrupt for division by zero, instead it sets the result
+        // to zero and moves on. Thus, division by zero cannot be relied upon to trigger an
+        // interrupt, and so correctness must be ascertained by checking against a standard C
+        // compiler.
+        // This procedure will need modification for later labs with invalid C syntax, such as `alloc` and
+        // `alloc_array`. It is possible that a compatibility library which defines alloc and
+        // alloc_array would suffice.
+        match executable_output {
+            Ok(result) => {
+                let status = result.code().unwrap_or_else(|| {
+                    panic!("process {executable_path} should have an exit code")
+                });
+                if expected == TestResult::Return(status as u8) {
+                    // success, pass
+                    true
+                } else if expected == TestResult::DivZero {
+                    // divzero can't be checked against the expected value, since no exceptions are
+                    // raised on ARM
+
+                    // default to pass, check against "correct" compiler later
+                    true
+                } else {
+                    eprintln!("incorrect result for execution of {executable_path}: expected {expected:?}, got {status}");
+                    false
+                }
+            }
+            Err(e) => {
+                eprintln!("could not execute file {executable_path}: {e}");
+                false
+            }
+        }
     }
 
     fn test_directory(path: &str) {
         let files = read_dir(path).expect("testing directory should exist");
-        let results = Arc::new(Mutex::new(Vec::new()));
 
         #[derive(Debug)]
         enum TestResult {
@@ -209,46 +322,49 @@ mod tests {
             Failure(String),
         }
 
-        let mut test_threads: Vec<_> = Vec::new();
+        let (sender, receiver) = std::sync::mpsc::channel();
 
         for entry in files {
             let entry = entry.expect("test file should exist");
             let path = entry.path();
             let path_str = path.to_str().unwrap().to_string();
 
+            if !path_str.ends_with("l1") {
+                // ignore non L1 files
+                continue;
+            }
+
             let mut file = File::open(&path_str).unwrap();
             let mut buf = Vec::new();
             let _ = file.read_to_end(&mut buf);
+            drop(file);
             let content = String::from_utf8_lossy(&buf).into_owned();
 
-            let results = results.clone();
+            let sender = sender.clone();
 
-            test_threads.push(thread::spawn(move || {
-                if test_file(content, &path_str, false) {
-                    results
-                        .lock()
-                        .unwrap()
-                        .push(TestResult::Success(path_str.to_string()));
+            thread::spawn(move || {
+                let result = if test_file(content, &path_str, false) {
+                    TestResult::Success(path_str.to_string())
                 } else {
-                    results
-                        .lock()
-                        .unwrap()
-                        .push(TestResult::Failure(path_str.to_string()));
-                }
-            }));
+                    TestResult::Failure(path_str.to_string())
+                };
+                sender.send(result).unwrap();
+            });
         }
 
-        for handle in test_threads {
-            if let Ok(()) = handle.join() {};
-        }
+        // close the channel
+        drop(sender);
 
         let mut passed = 0;
         let mut failed = 0;
-        for result in results.lock().unwrap().iter() {
+        let mut results = Vec::new();
+
+        for result in receiver {
             match result {
                 TestResult::Success(_) => passed += 1,
                 TestResult::Failure(_) => failed += 1,
-            }
+            };
+            results.push(result);
         }
 
         eprintln!(
@@ -260,8 +376,6 @@ mod tests {
 
         if failed > 0 {
             let _: Vec<_> = results
-                .lock()
-                .unwrap()
                 .iter()
                 .filter(|t| matches!(t, TestResult::Failure(_)))
                 .map(|t| eprintln!("{t:?}"))
@@ -271,8 +385,6 @@ mod tests {
     }
 
     mod l1 {
-        use std::{fs::File, io::Read};
-
         use super::*;
 
         #[test]
@@ -286,39 +398,13 @@ mod tests {
         }
 
         #[test]
+        fn custom() {
+            test_directory("tests/l1-custom");
+        }
+
+        #[test]
         fn wip() {
-            let problem_files = vec![
-                /*
-                "tests/l1-large/bellsprout-return02-l2.l1",
-                "tests/l1-large/simeonpoisson-randomizedlarge.l1",
-                "tests/l1-large/maryammirzakhani-chinese.l1",
-                "tests/l1-large/kelen-success4.l1",
-                "tests/l1-large/beorn-ret_negation.l1",
-                "tests/l1-large/theoden-binsource.l1",
-                "tests/l1-large/kelen-failcompile4.l1",
-                "tests/l1-large/sodium-whitespace_return.l1",
-                "tests/l1-large/indiana-hardreturn1.l1",
-                "tests/l1-large/dawn-undeclared_var_2.l1",
-                "tests/l1-large/elendil-specialchars-l2.l1",
-                "tests/l1-large/nicolotartaglia-whitespace.l1",
-                "tests/l1-large/isildur-return05-l2.l1",
-                "tests/l1-large/manganese-return05-l2.l1",
-                "tests/l1-large/lammergeier-ascii-whitespace.l1",
-                "tests/l1-large/hawk-ish-on-spec.l1",
-                */
-                /*
-                here */
-                "tests/l1-basic/exception03.l1",
-            ];
-
-            for path in problem_files {
-                let mut file = File::open(path).unwrap();
-                let mut buf = Vec::new();
-                let _ = file.read_to_end(&mut buf);
-                let content = String::from_utf8_lossy(&buf).into_owned();
-
-                assert!(test_file(content, path, true));
-            }
+            test_directory("tests/wip");
         }
     }
 }
