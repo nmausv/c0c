@@ -130,3 +130,7 @@
 ## Register Allocation
 - [ ] ignore for now, simply spill every variable onto the stack, to check for correctness of code generation
     - [ ] once validated, can implement register allocation
+
+## ARM
+- [ ] avoid generic conversions of operands, since we have to know the operand types for various kinds of `mov` instructions anyway
+    - means that we need to translate entire lines of `Instruction` structs into `String`s, can't translate parts of the `Instructions` in isolation

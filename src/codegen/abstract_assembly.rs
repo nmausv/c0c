@@ -6,7 +6,22 @@ use crate::heap_recursion::FrameProgress::{self, Done, New};
 use crate::temps::{Label, Temp, TempFactory};
 use crate::translation::tree::{self, Command, PureExp};
 
-type Program = Vec<Instruction>;
+pub struct Program(Vec<Instruction>);
+
+impl IntoIterator for Program {
+    type Item = Instruction;
+    type IntoIter = std::vec::IntoIter<Instruction>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl AsRef<[Instruction]> for Program {
+    fn as_ref(&self) -> &[Instruction] {
+        &self.0
+    }
+}
+
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub enum Instruction {
     Move {
@@ -196,23 +211,19 @@ impl tree::PureExp {
         tf: &mut TempFactory,
     ) -> Program {
         match self {
-            PureExp::Num(n) => {
-                vec![Instruction::Move {
-                    d: dest,
-                    s: Operand::IntConst(n),
-                }]
-            }
-            PureExp::Ident(x) => {
-                vec![Instruction::Move {
-                    d: dest,
-                    s: Operand::Temp(x.into()),
-                }]
-            }
+            PureExp::Num(n) => Program(vec![Instruction::Move {
+                d: dest,
+                s: Operand::IntConst(n),
+            }]),
+            PureExp::Ident(x) => Program(vec![Instruction::Move {
+                d: dest,
+                s: Operand::Temp(x.into()),
+            }]),
             PureExp::PureBinop(e1, op, e2) => {
                 let t1 = Destination::Temp(tf.make_temp());
                 let t2 = Destination::Temp(tf.make_temp());
-                let mut first = e1.cogen_recursive(t1.clone(), tf);
-                let mut second = e2.cogen_recursive(t2.clone(), tf);
+                let Program(mut first) = e1.cogen_recursive(t1.clone(), tf);
+                let Program(mut second) = e2.cogen_recursive(t2.clone(), tf);
                 first.append(&mut second);
                 first.push(Instruction::Binop {
                     d: dest,
@@ -220,18 +231,19 @@ impl tree::PureExp {
                     op: crate::frontend::ast::Binop::from(op),
                     s2: t2.into(),
                 });
-                first
+                Program(first)
             }
             PureExp::Unop(op, exp) => {
                 let t1 = Destination::Temp(tf.make_temp());
-                let mut instructions = exp.cogen_recursive(t1.clone(), tf);
+                let Program(mut instructions) =
+                    exp.cogen_recursive(t1.clone(), tf);
                 instructions.push(Instruction::Unop {
                     d: dest,
                     op,
                     s: t1.into(),
                 });
 
-                instructions
+                Program(instructions)
             }
         }
     }
@@ -240,7 +252,7 @@ impl tree::PureExp {
         self,
         dest: Destination,
         tf: &mut TempFactory,
-    ) -> Program {
+    ) -> Vec<Instruction> {
         let mut program = Vec::new();
         let mut stack = Vec::new();
 
@@ -317,7 +329,11 @@ impl tree::PureExp {
         program
     }
 
-    fn cogen(self, dest: Destination, tf: &mut TempFactory) -> Program {
+    fn cogen(
+        self,
+        dest: Destination,
+        tf: &mut TempFactory,
+    ) -> Vec<Instruction> {
         self.cogen_iterative(dest, tf)
     }
 }
@@ -386,9 +402,11 @@ fn cogen_command(
 }
 
 pub fn ir_to_abstract(ir: tree::Program, tf: &mut TempFactory) -> Program {
-    ir.into_iter()
-        .flat_map(|command| cogen_command(command, tf))
-        .collect()
+    Program(
+        ir.into_iter()
+            .flat_map(|command| cogen_command(command, tf))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -652,7 +670,7 @@ mod abs_asm_tests {
         let ir = translation::translate(elab, &mut tf);
         let commands = ir_to_abstract(ir, &mut tf);
 
-        match abs_asm_runner(&commands) {
+        match abs_asm_runner(commands.as_ref()) {
             Ok(Some(1)) => (),
             _ => panic!("unexpected simulation result"),
         }
